@@ -1,0 +1,41 @@
+.dashboard-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.dashboard-title {
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.dashboard-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dashboard-search {
+  width: 260px;
+}
+
+.dashboard-empty {
+  padding: 24px;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  text-align: center;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+
+.endpoint-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 14px;
+}
