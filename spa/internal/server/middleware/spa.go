@@ -19,6 +19,24 @@ var blockedExt = map[string]bool{
 	".map": true,
 }
 
+// blockedExt 에 걸리더라도 서빙을 허용하는 경로 prefix
+// ( 프론트가 런타임에 fetch 하는 설정 파일: build/config/endpoints.ini )
+var allowedPrefixes = []string{
+	"/config/",
+}
+
+func isBlocked(urlPath, ext string) bool {
+	if !blockedExt[ext] {
+		return false
+	}
+	for _, prefix := range allowedPrefixes {
+		if strings.HasPrefix(urlPath, prefix) {
+			return false
+		}
+	}
+	return true
+}
+
 // SpaHandler 는 staticDir 의 빌드 결과물을 서빙한다.
 //   - 파일이 있으면 그대로 서빙
 //   - 확장자 없는 경로(/about, /users/1 ...)는 클라이언트 라우팅으로 보고 indexFile 로 fallback
@@ -41,7 +59,7 @@ func SpaHandler(apiPrefix, staticDir, indexFile string) gin.HandlerFunc {
 		}
 
 		ext := path.Ext(urlPath)
-		if blockedExt[ext] {
+		if isBlocked(urlPath, ext) {
 			c.AbortWithStatus(http.StatusNotFound)
 			return
 		}
