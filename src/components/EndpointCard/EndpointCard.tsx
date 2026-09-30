@@ -32,6 +32,10 @@ const EndpointCard: React.FC<EndpointCardProps> = ({ config, filter }) => {
     config.url.toLowerCase().includes(lowerFilter);
   const dataMatches = filter === '' || subtreeMatches(undefined, data, filter);
 
+  // 로딩 여부는 LOADING 배지로 따로 보여주고, 상태 점은 로딩 중에도 마지막 결과를 유지한다.
+  const isLoading = status === 'loading';
+  const lastResult = isLoading ? (error !== null ? 'error' : data !== null ? 'ok' : 'loading') : status;
+
   if (filter !== '' && !metaMatches && !dataMatches) {
     return null;
   }
@@ -40,8 +44,14 @@ const EndpointCard: React.FC<EndpointCardProps> = ({ config, filter }) => {
     <section className="endpoint-card">
       <header className="endpoint-card-header">
         <div className="endpoint-card-title-row">
-          <span className={`status-dot status-${status}`} title={status} />
+          <span className={`status-dot status-${lastResult}`} title={lastResult} />
           <span className="endpoint-card-label">{config.label}</span>
+          {isLoading && (
+            <span className="endpoint-card-loading-badge">
+              <span className="endpoint-card-spinner" />
+              LOADING
+            </span>
+          )}
           {paused && <span className="endpoint-card-paused-badge">PAUSED</span>}
         </div>
         <div className="endpoint-card-actions">
@@ -61,8 +71,11 @@ const EndpointCard: React.FC<EndpointCardProps> = ({ config, filter }) => {
 
       <div className="endpoint-card-body">
         {status === 'idle' && <div className="endpoint-card-placeholder">첫 응답을 기다리는 중...</div>}
-        {status === 'loading' && data === null && <div className="endpoint-card-placeholder">로딩 중...</div>}
-        {status === 'error' && <div className="endpoint-card-error">{error}</div>}
+        {status === 'loading' && data === null && error === null && (
+          <div className="endpoint-card-placeholder">로딩 중...</div>
+        )}
+        {/* 재시도(loading) 중에도 직전 에러를 계속 보여준다. 성공하면 poller가 error를 null로 비운다. */}
+        {error !== null && <div className="endpoint-card-error">{error}</div>}
         {data !== null && (status === 'ok' || status === 'loading' || status === 'error') && (
           <JsonViewer data={data} filter={filter} />
         )}

@@ -130,3 +130,36 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
 }
+
+/* 응답이 빠른 엔드포인트에서 매 폴링마다 깜빡이지 않도록 300ms 뒤에 나타난다. */
+.endpoint-card-loading-badge {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  font-size: 0.65rem;
+  color: var(--accent);
+  letter-spacing: 0.05em;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  opacity: 0;
+  animation: endpoint-fade-in 0.15s ease-out 0.3s forwards;
+}
+
+.endpoint-card-spinner {
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--accent);
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: endpoint-spin 0.8s linear infinite;
+}
+
+@keyframes endpoint-fade-in {
+  to { opacity: 1; }
+}
+
+@keyframes endpoint-spin {
+  to { transform: rotate(360deg); }
+}
