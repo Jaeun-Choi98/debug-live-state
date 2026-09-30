@@ -59,7 +59,9 @@ export function useEndpointPoller(config: EndpointConfig): UseEndpointPollerResu
       const message = e instanceof Error ? e.message : String(e);
       setState(prev => ({ ...prev, status: 'error', error: message, lastUpdatedAt: new Date() }));
     } finally {
-      if (mountedRef.current && !pausedRef.current) {
+      // 다른 poll()에 의해 대체되었거나 언마운트로 취소된 요청은 다음 스케줄을 잡지 않는다.
+      // (잡으면 폴링 체인이 둘로 늘어나 서로의 요청을 계속 abort 하게 됨)
+      if (!controller.signal.aborted && mountedRef.current && !pausedRef.current) {
         timerRef.current = setTimeout(poll, config.pollIntervalMs);
       }
     }
@@ -76,14 +78,14 @@ export function useEndpointPoller(config: EndpointConfig): UseEndpointPollerResu
   }, [poll]);
 
   const togglePaused = useCallback(() => {
-    setPaused(prev => {
-      const next = !prev;
-      if (timerRef.current) clearTimeout(timerRef.current);
-      if (!next) {
-        poll();
-      }
-      return next;
-    });
+    // setState updater 안에서 poll()을 부르면 StrictMode에서 두 번 실행되므로 밖에서 처리한다.
+    const next = !pausedRef.current;
+    pausedRef.current = next;
+    setPaused(next);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (!next) {
+      poll();
+    }
   }, [poll]);
 
   const refreshNow = useCallback(() => {
