@@ -1,24 +1,25 @@
-package server
+package rest
 
 import (
 	"context"
 	"net/http"
 	"pjt/internal/config"
-	"pjt/internal/logger"
-	"pjt/internal/server/middleware"
+
+	"pjt/internal/transport/middleware"
 	"time"
 
+	"github.com/Jaeun-Choi98/modules/logger"
 	"github.com/gin-gonic/gin"
 )
 
-type Server struct {
+type RestServer struct {
 	server *http.Server
 	useTLS bool
 	cert   string
 	key    string
 }
 
-func New(cfg *config.Configuration) *Server {
+func New(cfg *config.Configuration) *RestServer {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery(), middleware.LogMiddleware(), middleware.NewCORSMiddleware(cfg.Cors, true))
@@ -35,7 +36,7 @@ func New(cfg *config.Configuration) *Server {
 
 	router.NoRoute(middleware.SpaHandler("/api", cfg.SpaDir, cfg.SpaIndex))
 
-	return &Server{
+	return &RestServer{
 		server: &http.Server{
 			Addr:        cfg.RestIp + ":" + cfg.RestPort,
 			Handler:     router,
@@ -64,15 +65,17 @@ func handleLogConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"level": logger.GetLevel().String()})
 }
 
-func (s *Server) Start() error {
+func (s *RestServer) Start() error {
+	logger.Infof("[REST] http rest server goroutine start")
+
 	if s.useTLS {
 		return s.server.ListenAndServeTLS(s.cert, s.key)
 	}
 	return s.server.ListenAndServe()
 }
 
-func (s *Server) Shutdown(ctx context.Context) error {
+func (s *RestServer) Shutdown(ctx context.Context) error {
 	err := s.server.Shutdown(ctx)
-	logger.Infoln("[REST] server terminated")
+	logger.Infoln("[REST] http rest server goroutine is terminated")
 	return err
 }

@@ -3,6 +3,7 @@ module pjt
 go 1.24.0
 
 require (
+	github.com/Jaeun-Choi98/modules/logger v1.0.0
 	github.com/gin-gonic/gin v1.10.1
 	github.com/go-ini/ini v1.67.0
 )

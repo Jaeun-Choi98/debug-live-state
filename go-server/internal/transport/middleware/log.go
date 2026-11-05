@@ -2,9 +2,10 @@ package middleware
 
 import (
 	"fmt"
-	"pjt/internal/logger"
+
 	"time"
 
+	"github.com/Jaeun-Choi98/modules/logger"
 	"github.com/gin-gonic/gin"
 )
 
