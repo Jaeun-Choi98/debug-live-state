@@ -7,6 +7,11 @@ import (
 	"github.com/go-ini/ini"
 )
 
+const (
+	TEST    = 0
+	PRODUCT = 1
+)
+
 type Configuration struct {
 	// http-rest
 	RestIp   string
@@ -22,6 +27,9 @@ type Configuration struct {
 
 	// log
 	LogLevel string
+
+	// deploy env
+	DeployMode int
 }
 
 func NewConfiguration() (*Configuration, error) {
@@ -40,6 +48,8 @@ func NewConfiguration() (*Configuration, error) {
 		SpaDir:   cfgFile.Section("SPA").Key("DIR").MustString("build"),
 		SpaIndex: cfgFile.Section("SPA").Key("INDEX").MustString("index.html"),
 		LogLevel: cfgFile.Section("LOG").Key("LEVEL").MustString("INFO"),
+
+		DeployMode: cfgFile.Section("DEPLOY_SATE").Key("MODE").MustInt(TEST),
 	}
 
 	for _, origin := range strings.Split(rest.Key("CORS").MustString(""), ",") {
