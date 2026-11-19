@@ -136,9 +136,13 @@ func handlePutConfig(store *processes.Store, monitor *processes.Monitor) gin.Han
 		}
 
 		config, err := store.Save(body)
+		var userErr *processes.UserError
 		switch {
 		case errors.Is(err, processes.ErrInvalid):
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		case errors.As(err, &userErr): // 409: 설정 창을 연 뒤 다른 곳에서 바뀜
+			respondError(c, err)
 			return
 		case err != nil:
 			logger.Errorf("[REST] failed to save processes config, err: %v", err)

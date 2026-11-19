@@ -129,6 +129,11 @@ const toRowMessage = (message: string) =>
 const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) => {
   /** 위쪽 숫자 칸 (빈 칸이면 기본값) */
   const [timing, setTiming] = useState(() => toTiming(config));
+  /**
+   * 창을 열 때의 설정 version. 저장할 때 보내서, 그 사이 감시 창 · 다른 사용자가 바꾼 내용을 덮어쓰지 않게 한다.
+   * (창이 열린 동안 config 가 새로 들어와도 이 값은 바꾸지 않는다)
+   */
+  const [baseVersion] = useState(config.version);
   const [rows, setRows] = useState<Record<Section, Row[]>>(() => toRows(config));
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ kind: 'error' | 'info'; text: string } | null>(null);
@@ -288,10 +293,14 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) 
     setSaving(true);
     setMessage(null);
     try {
-      await onSave(validation.config);
+      await onSave({ ...validation.config, version: baseVersion });
       onClose();
     } catch (err) {
-      setMessage({ kind: 'error', text: `저장하지 못했습니다: ${err instanceof Error ? err.message : String(err)}` });
+      const text = err instanceof Error ? err.message : String(err);
+      const conflict = text.includes('설정이 바뀌었습니다')
+        ? '\n지금 편집한 내용은 저장되지 않았습니다. 남기려면 [내보내기]로 받아 둔 뒤, 창을 닫고 다시 열어(최신 설정을 읽습니다) 다시 고치세요.'
+        : '';
+      setMessage({ kind: 'error', text: `저장하지 못했습니다: ${text}${conflict}` });
       setSaving(false);
     }
   };

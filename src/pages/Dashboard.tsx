@@ -21,7 +21,7 @@ interface DashboardProps {
 }
 
 const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
-  const { config, loading, error, reload, save, apply } = useProcessConfig();
+  const { config, loading, error, reload, refresh, save, apply } = useProcessConfig();
   const [filter, setFilter] = useState('');
   const [editorOpen, setEditorOpen] = useState(false);
   /** 열려 있는 로그 · INI 폴더 창 */
@@ -59,6 +59,18 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
   }));
 
   const closeEditor = useCallback(() => setEditorOpen(false), []);
+  /**
+   * 설정 창은 최신 설정을 읽은 뒤 연다. 다른 사용자 · 다른 탭이 바꾼 내용 위에서 편집해야
+   * 저장할 때 '그 사이 바뀌었다(409)' 로 막히지 않는다. 읽지 못하면 지금 화면의 설정으로 연다.
+   */
+  const openEditor = async () => {
+    try {
+      await refresh();
+    } catch {
+      // 저장할 때 서버가 다시 확인한다.
+    }
+    setEditorOpen(true);
+  };
   const closeFiles = useCallback(() => setFileTarget(null), []);
   const closeWatch = useCallback(() => setWatchTarget(null), []);
 
@@ -117,7 +129,7 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
                   value={filter}
                   onChange={e => setFilter(e.target.value)}
                 />
-                <button className="btn btn-secondary" onClick={() => setEditorOpen(true)} disabled={config === null}>
+                <button className="btn btn-secondary" onClick={openEditor} disabled={config === null}>
                   ⚙ 설정
                 </button>
                 <button className="btn btn-primary" onClick={status.refresh} disabled={config === null || !slugExists}>

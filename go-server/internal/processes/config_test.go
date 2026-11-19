@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,7 +52,9 @@ func TestValidateCollectsAllErrors(t *testing.T) {
 func TestSaveKeepsPasswordOnlyForSameTarget(t *testing.T) {
 	store := NewStore(filepath.Join(t.TempDir(), "data", "processes.json"))
 	save := func(server map[string]any) (*Config, error) {
+		current, _ := store.Load()
 		body, _ := json.Marshal(map[string]any{
+			"version":   current.Version,
 			"groups":    []any{map[string]any{"slug": "uw", "name": "의왕"}},
 			"servers":   []any{server},
 			"processes": []any{},
@@ -237,5 +240,43 @@ func TestWatchInstances(t *testing.T) {
 		if got := pids(c.process); fmt.Sprint(got) != fmt.Sprint(c.want) {
 			t.Errorf("%+v: got %v, want %v", c.process, got, c.want)
 		}
+	}
+}
+
+func TestSaveRejectsStaleVersion(t *testing.T) {
+	store := NewStore(filepath.Join(t.TempDir(), "processes.json"))
+	body := func(version string) []byte {
+		data, _ := json.Marshal(Config{
+			Version:   version,
+			Groups:    []Group{{Slug: "uw", Name: "의왕"}},
+			Servers:   []Server{{ID: "s1", Group: "uw", Host: "10.0.0.1", User: "ops", Password: "pw"}},
+			Processes: []Process{{ID: "a", Server: "s1", Match: "java", StartScript: "/opt/a/start.sh"}},
+		})
+		return data
+	}
+	first, err := store.Save(body(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded, _ := store.Load(); loaded.Version != first.Version || first.Version == "" {
+		t.Fatalf("version = %q, loaded %q", first.Version, loaded.Version)
+	}
+	if data, _ := os.ReadFile(store.path); strings.Contains(string(data), "version") {
+		t.Error("version written to file")
+	}
+
+	// 설정 창을 연 상태(first.Version)에서 감시 창이 먼저 저장하면, 설정 창 저장은 409 로 거부된다.
+	watched, err := store.UpdateWatch("a", WatchUpdate{AutoRestart: true, WatchArgs: "a.jar"})
+	if err != nil || watched.Version == first.Version {
+		t.Fatalf("update watch: %v, version %q", err, watched.Version)
+	}
+	if _, err := store.Save(body(first.Version)); !isStatus(err, http.StatusConflict) {
+		t.Errorf("stale save: %v", err)
+	}
+	if loaded, _ := store.Load(); !loaded.Processes[0].AutoRestart {
+		t.Error("watch change was overwritten")
+	}
+	if _, err := store.Save(body(watched.Version)); err != nil {
+		t.Errorf("save with latest version: %v", err)
 	}
 }

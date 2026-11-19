@@ -57,8 +57,18 @@ export function useProcessConfig() {
     );
   }, []);
 
+  /**
+   * 최신 설정을 읽어 화면을 갱신한다. reload 와 달리 실패해도 지금 화면을 그대로 두고 에러를 던진다.
+   * (설정 창을 열 때, 다른 사용자가 바꾼 내용 위에서 편집하도록)
+   */
+  const refresh = useCallback(async () => {
+    const result = validateProcessConfig(await requestApi(API_URL));
+    if (!result.ok) throw new Error(`설정이 올바르지 않습니다\n${result.errors.join('\n')}`);
+    setConfig(result.config);
+  }, []);
+
   /** 다른 API(예: PUT /api/processes/:id/watch)가 돌려준 저장된 설정으로 화면을 갱신한다. */
   const apply = useCallback((next: ProcessConfig) => setConfig(next), []);
 
-  return { config, loading, error, reload, save, apply };
+  return { config, loading, error, reload, refresh, save, apply };
 }

@@ -23,10 +23,13 @@ type Config struct {
 	// 자동 재시작 확인 주기(ms). 0 이면 10000
 	WatchIntervalMs int `json:"watchIntervalMs,omitempty"`
 	// 자동 · 화면에서 시작한 뒤 프로세스가 뜨기를 기다리는 시간(ms). 이 시간 안에는 다시 자동 시작하지 않는다. 0 이면 30000
-	RestartDelayMs int       `json:"restartDelayMs,omitempty"`
-	Groups         []Group   `json:"groups"`
-	Servers        []Server  `json:"servers"`
-	Processes      []Process `json:"processes"`
+	RestartDelayMs int `json:"restartDelayMs,omitempty"`
+	// 조회 · 저장 전용. 설정 파일 내용의 sha256 으로, 파일에는 쓰지 않는다.
+	// 저장할 때 화면이 읽었던 version 을 돌려보내고, 그 사이 파일이 바뀌었으면(감시 창 · 다른 사용자 · 직접 수정) 거부한다.
+	Version   string    `json:"version,omitempty"`
+	Groups    []Group   `json:"groups"`
+	Servers   []Server  `json:"servers"`
+	Processes []Process `json:"processes"`
 }
 
 type Group struct {
@@ -225,6 +228,7 @@ func (s *Store) load() (*Config, error) {
 		return nil, fmt.Errorf("%s: %w", s.path, err)
 	}
 	migrateLogFile(data, &c)
+	c.Version = contentHash(string(data))
 	return &c, nil
 }
 
@@ -275,6 +279,10 @@ func (s *Store) Save(body []byte) (*Config, error) {
 	current, err := s.load()
 	if err != nil {
 		return nil, err
+	}
+	// 설정 창을 연 뒤 다른 곳에서 설정이 바뀌었으면 덮어쓰지 않는다. (바뀐 내용이 사라지지 않도록)
+	if next.Version != current.Version {
+		return nil, &UserError{http.StatusConflict, "설정 창을 연 뒤 다른 곳(감시 창, 다른 사용자, 파일 직접 수정)에서 설정이 바뀌었습니다"}
 	}
 	saved := map[string]Server{}
 	for _, server := range current.Servers {
@@ -343,13 +351,19 @@ func (s *Store) UpdateWatch(processID string, update WatchUpdate) (*Config, erro
 	return config, nil
 }
 
-// write 는 s.mu 를 잡은 상태에서 호출한다.
+// write 는 s.mu 를 잡은 상태에서 호출한다. 저장한 뒤 c.Version 을 새 내용의 version 으로 바꾼다.
 func (s *Store) write(c *Config) error {
+	c.Version = ""
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(s.path, append(data, '\n'))
+	data = append(data, '\n')
+	if err := writeFileAtomic(s.path, data); err != nil {
+		return err
+	}
+	c.Version = contentHash(string(data))
+	return nil
 }
 
 // writeFileAtomic 은 쓰는 도중 실패해도 기존 파일이 깨지지 않도록 임시 파일(0600)에 쓴 뒤 바꿔치기한다.
