@@ -1,11 +1,16 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { FileList, ProcessEntry } from '../../config/types';
 import { requestApi } from '../../hooks/useProcessConfig';
+import IniEditor from '../IniEditor/IniEditor';
 import './LogViewer.css';
+
+/** log: 로그 폴더(logDir), 파일은 tail 로 보기 / ini: 설정 폴더(configDir), *.ini 만 보이고 파일은 편집 */
+export type FileRoot = 'log' | 'ini';
 
 interface LogViewerProps {
   process: ProcessEntry;
   serverLabel: string;
+  root: FileRoot;
   onClose: () => void;
 }
 
@@ -25,11 +30,22 @@ const formatSize = (size: number) =>
         : `${(size / 1024 ** 3).toFixed(2)} GB`;
 
 /**
- * 로그 폴더(logDir) 아래를 둘러보다가(폴더 → 파일 목록) 파일을 고르면 끝부분(tail -n)을 보여준다.
- * 파일 화면에서 자동 새로고침을 켜면 3초마다 다시 읽는다.
+ * 프로세스의 로그 · 설정 폴더 아래를 둘러보다가(폴더 → 파일 목록) 파일을 고르면
+ *   - 로그(root=log): 끝부분(tail -n)을 보여준다. 자동 새로고침을 켜면 3초마다 다시 읽는다.
+ *   - 설정(root=ini): *.ini 파일을 편집기(IniEditor)로 열어 고치고 저장한다.
  */
-const LogViewer: React.FC<LogViewerProps> = ({ process: target, serverLabel, onClose }) => {
-  /** 보고 있는 폴더 (로그 폴더 기준 상대 경로, '' 이면 로그 폴더) */
+const LogViewer: React.FC<LogViewerProps> = ({ process: target, serverLabel, root, onClose }) => {
+  const rootDir = root === 'ini' ? target.configDir : target.logDir;
+  /** INI 편집기에 저장하지 않은 변경이 있는지 (떠날 때 확인) */
+  const [dirty, setDirty] = useState(false);
+  /** 저장하지 않은 변경이 있으면 버릴지 묻고, 버려도 되면 action 을 실행한다. */
+  const leave = (action: () => void) => {
+    if (dirty && !window.confirm('저장하지 않은 변경이 있습니다. 버릴까요?')) return;
+    setDirty(false);
+    action();
+  };
+
+  /** 보고 있는 폴더 (등록한 폴더 기준 상대 경로, '' 이면 등록한 폴더) */
   const [dir, setDir] = useState('');
   /** 고른 파일 (상대 경로). null 이면 폴더 목록 화면 */
   const [file, setFile] = useState<string | null>(null);
@@ -51,18 +67,20 @@ const LogViewer: React.FC<LogViewerProps> = ({ process: target, serverLabel, onC
     setList(null);
     setListError(null);
     try {
-      setList(await requestApi<FileList>(`${PROCESSES_API}/${encodeURIComponent(target.id)}/files?path=${encodeURIComponent(dir)}`));
+      setList(
+        await requestApi<FileList>(`${PROCESSES_API}/${encodeURIComponent(target.id)}/files?root=${root}&path=${encodeURIComponent(dir)}`)
+      );
     } catch (e) {
       setListError(e instanceof Error ? e.message : String(e));
     }
-  }, [target.id, dir]);
+  }, [target.id, root, dir]);
 
   useEffect(() => {
     if (file === null) loadList();
   }, [loadList, file]);
 
   const load = useCallback(async () => {
-    if (file === null) return;
+    if (file === null || root !== 'log') return;
     setLoading(true);
     try {
       const body = await requestApi<{ output: string }>(
@@ -76,15 +94,15 @@ const LogViewer: React.FC<LogViewerProps> = ({ process: target, serverLabel, onC
     } finally {
       setLoading(false);
     }
-  }, [target.id, file, lines]);
+  }, [target.id, root, file, lines]);
 
   useEffect(() => {
-    if (file === null) return;
+    if (file === null || root !== 'log') return;
     load();
     if (!autoRefresh) return;
     const timer = setInterval(load, AUTO_REFRESH_MS);
     return () => clearInterval(timer);
-  }, [load, autoRefresh, file]);
+  }, [load, autoRefresh, file, root]);
 
   const openFile = (path: string) => {
     setOutput(null);
@@ -93,10 +111,12 @@ const LogViewer: React.FC<LogViewerProps> = ({ process: target, serverLabel, onC
     stickToBottomRef.current = true;
     setFile(path);
   };
-  const closeFile = () => {
-    setFile(null);
-    setAutoRefresh(false);
-  };
+  const closeFile = () =>
+    leave(() => {
+      setFile(null);
+      setAutoRefresh(false);
+    });
+  const close = () => leave(onClose);
 
   useEffect(() => {
     const el = bodyRef.current;
@@ -111,21 +131,23 @@ const LogViewer: React.FC<LogViewerProps> = ({ process: target, serverLabel, onC
   }, []);
 
   // Esc 는 파일 화면이면 목록으로, 목록 화면이면 창을 닫는다.
-  escapeRef.current = file === null ? onClose : closeFile;
+  escapeRef.current = file === null ? close : closeFile;
 
-  /** 경로 막대: 로그 폴더 / 하위 폴더 / 파일. 폴더를 누르면 그 폴더 목록으로 간다. */
+  /** 경로 막대: 등록한 폴더 / 하위 폴더 / 파일. 폴더를 누르면 그 폴더 목록으로 간다. */
   const segments = (file ?? dir).split('/').filter(Boolean);
   const crumbs = (
     <nav className="log-viewer-crumbs">
       <button
         className="log-viewer-linkbtn"
-        onClick={() => {
-          setFile(null);
-          setDir('');
-        }}
-        title={target.logDir}
+        onClick={() =>
+          leave(() => {
+            setFile(null);
+            setDir('');
+          })
+        }
+        title={rootDir}
       >
-        {target.logDir}
+        {rootDir}
       </button>
       {segments.map((segment, i) => {
         const isFile = file !== null && i === segments.length - 1;
@@ -138,10 +160,12 @@ const LogViewer: React.FC<LogViewerProps> = ({ process: target, serverLabel, onC
             ) : (
               <button
                 className="log-viewer-linkbtn"
-                onClick={() => {
-                  closeFile();
-                  setDir(path);
-                }}
+                onClick={() =>
+                  leave(() => {
+                    setFile(null);
+                    setDir(path);
+                  })
+                }
               >
                 {segment}
               </button>
@@ -159,14 +183,15 @@ const LogViewer: React.FC<LogViewerProps> = ({ process: target, serverLabel, onC
     .filter(line => line.toLowerCase().includes(lowerFilter));
 
   return (
-    <div className="log-viewer-backdrop" onMouseDown={e => e.target === e.currentTarget && onClose()}>
-      <div className="log-viewer" role="dialog" aria-modal="true" aria-label="로그 보기">
+    <div className="log-viewer-backdrop" onMouseDown={e => e.target === e.currentTarget && close()}>
+      <div className="log-viewer" role="dialog" aria-modal="true" aria-label={root === 'ini' ? 'INI 편집' : '로그 보기'}>
         <header className="log-viewer-header">
           <div className="log-viewer-title">
             <strong>{target.label || target.id}</strong>
             <span>{serverLabel}</span>
+            <span className="log-viewer-kind">{root === 'ini' ? 'INI 설정' : '로그'}</span>
           </div>
-          <button className="btn-icon" onClick={onClose} title="닫기">
+          <button className="btn-icon" onClick={close} title="닫기">
             ✕
           </button>
         </header>
@@ -189,7 +214,9 @@ const LogViewer: React.FC<LogViewerProps> = ({ process: target, serverLabel, onC
           <div className="log-viewer-files">
             {listError && <div className="log-viewer-error">{listError}</div>}
             {!list && !listError && <div className="log-viewer-placeholder">읽는 중...</div>}
-            {list && list.entries.length === 0 && <div className="log-viewer-placeholder">(비어 있음)</div>}
+            {list && list.entries.length === 0 && (
+              <div className="log-viewer-placeholder">{root === 'ini' ? '(.ini 파일이 없습니다)' : '(비어 있음)'}</div>
+            )}
             {list && list.entries.length > 0 && (
               <table className="log-viewer-file-table">
                 <thead>
@@ -230,6 +257,8 @@ const LogViewer: React.FC<LogViewerProps> = ({ process: target, serverLabel, onC
             )}
             {list?.truncated && <div className="log-viewer-placeholder">항목이 많아 최근 수정된 {list.entries.length}개만 보여줍니다.</div>}
           </div>
+        ) : root === 'ini' ? (
+          <IniEditor processId={target.id} path={file} onDirtyChange={setDirty} />
         ) : (
           <>
             <div className="log-viewer-toolbar">

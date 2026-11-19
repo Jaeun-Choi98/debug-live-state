@@ -54,7 +54,7 @@ test('collects every error with its location', () => {
     'processes[0].startScript',
     'processes[0].watchName',
     'processes[1].server',
-    'processes[1].watchName',
+    'processes[1].watchArgs',
     'processes[1].startScript',
   ]);
 });

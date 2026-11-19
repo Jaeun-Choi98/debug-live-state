@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 )
 
@@ -56,14 +58,18 @@ type Process struct {
 	Match string `json:"match"`
 	// 로그 폴더의 절대 경로. 화면에서 이 폴더 아래의 파일 · 폴더를 둘러보고 파일을 tail 로 본다.
 	LogDir string `json:"logDir,omitempty"`
+	// 설정(INI) 폴더의 절대 경로. 화면에서 이 폴더 아래의 *.ini 파일을 열어 읽고 고친다.
+	ConfigDir string `json:"configDir,omitempty"`
 	// 시작 · 재시작 때 실행할 스크립트의 절대 경로 (인자 없이 실행)
 	StartScript string `json:"startScript,omitempty"`
 
-	// 자동 재시작. 켜 두면 감시 프로세스가 ps 에 없을 때 시작 스크립트를 실행한다. (Watchdog 참고)
+	// 자동 재시작. 켜 두면 감시 프로세스가 ps 에 없을 때 시작 스크립트를 실행한다. (watchdog.go 참고)
+	// 아래 세 값은 모니터링 화면에서 프로세스별로 바꾼다. (Store.UpdateWatch)
 	AutoRestart bool `json:"autoRestart,omitempty"`
-	// 감시 프로세스의 실행 파일 이름. ps 명령줄 첫 단어의 파일 이름과 정확히 같아야 한다. (예: java)
+	// 감시 프로세스의 실행 파일 이름. ps 명령줄 첫 단어의 파일 이름과 정확히 같아야 한다. (예: java, 비워 두면 문자열만 본다)
 	WatchName string `json:"watchName,omitempty"`
 	// 감시 프로세스의 명령줄에 들어 있어야 하는 문자열 (정규식 아님, 비워 두면 이름만 본다) (예: /opt/app/app.jar)
+	// 이름 · 문자열 중 하나 이상 필요하고, 둘 다 적으면 한 프로세스가 둘 다 만족해야 한다.
 	WatchArgs string `json:"watchArgs,omitempty"`
 }
 
@@ -165,7 +171,7 @@ func (c *Config) Validate() error {
 		if _, err := regexp.Compile(p.Match); p.Match == "" || err != nil {
 			add("%s.match: 올바른 정규식이 필요합니다", at)
 		}
-		for field, value := range map[string]string{"logDir": p.LogDir, "startScript": p.StartScript} {
+		for field, value := range map[string]string{"logDir": p.LogDir, "configDir": p.ConfigDir, "startScript": p.StartScript} {
 			// path.Clean 과 다르면 '..', '//' 등이 들어 있는 경로다.
 			if value != "" && (!pathPattern.MatchString(value) || path.Clean(value) != value) {
 				add("%s.%s: 영문 · 숫자 · . _ - / 로 된 절대 경로가 필요합니다", at, field)
@@ -174,8 +180,8 @@ func (c *Config) Validate() error {
 		if p.WatchName != "" && !watchNamePattern.MatchString(p.WatchName) {
 			add("%s.watchName: 경로 · 공백 없는 실행 파일 이름이 필요합니다 (예: java)", at)
 		}
-		if p.AutoRestart && p.WatchName == "" {
-			add("%s.watchName: 자동 재시작에는 감시 프로세스 이름이 필요합니다", at)
+		if p.AutoRestart && p.WatchName == "" && p.WatchArgs == "" {
+			add("%s.watchArgs: 자동 재시작에는 감시 이름이나 감시 문자열이 필요합니다", at)
 		}
 		if p.AutoRestart && p.StartScript == "" {
 			add("%s.startScript: 자동 재시작에는 시작 스크립트가 필요합니다", at)
@@ -202,7 +208,11 @@ var ErrInvalid = errors.New("invalid processes config")
 func (s *Store) Load() (*Config, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.load()
+}
 
+// load 는 s.mu 를 잡은 상태에서 호출한다.
+func (s *Store) load() (*Config, error) {
 	data, err := os.ReadFile(s.path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return &Config{Groups: []Group{}, Servers: []Server{}, Processes: []Process{}}, nil
@@ -260,7 +270,9 @@ func (s *Store) Save(body []byte) (*Config, error) {
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 
-	current, err := s.Load()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, err := s.load()
 	if err != nil {
 		return nil, err
 	}
@@ -279,18 +291,65 @@ func (s *Store) Save(body []byte) (*Config, error) {
 	if err := next.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-
-	data, err := json.MarshalIndent(next, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := writeFileAtomic(s.path, append(data, '\n')); err != nil {
+	if err := s.write(&next); err != nil {
 		return nil, err
 	}
 	return &next, nil
+}
+
+// WatchUpdate 는 모니터링 화면에서 바꾸는 프로세스 하나의 자동 재시작 설정이다.
+type WatchUpdate struct {
+	AutoRestart bool   `json:"autoRestart"`
+	WatchName   string `json:"watchName"`
+	WatchArgs   string `json:"watchArgs"`
+}
+
+// UpdateWatch 는 프로세스 하나의 자동 재시작 설정만 바꿔 저장하고, 저장한 설정(비밀번호 포함)을 돌려준다.
+func (s *Store) UpdateWatch(processID string, update WatchUpdate) (*Config, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	config, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+	index := -1
+	for i, p := range config.Processes {
+		if p.ID == processID {
+			index = i
+		}
+	}
+	if index < 0 {
+		return nil, &UserError{http.StatusNotFound, fmt.Sprintf("'%s' 프로세스가 없습니다", processID)}
+	}
+	p := &config.Processes[index]
+	p.AutoRestart, p.WatchName, p.WatchArgs = update.AutoRestart, strings.TrimSpace(update.WatchName), strings.TrimSpace(update.WatchArgs)
+
+	// 이 프로세스의 문제만 "processes[3]." 을 떼고 알려준다. (다른 항목의 문제는 설정 화면에서 고칠 일이므로 막지 않는다)
+	if err := config.Validate(); err != nil {
+		prefix := fmt.Sprintf("processes[%d].", index)
+		var mine []string
+		for _, line := range strings.Split(err.Error(), "\n") {
+			if strings.HasPrefix(line, prefix) {
+				mine = append(mine, strings.TrimPrefix(line, prefix))
+			}
+		}
+		if len(mine) > 0 {
+			return nil, &UserError{http.StatusBadRequest, strings.Join(mine, "\n")}
+		}
+	}
+	if err := s.write(config); err != nil {
+		return nil, err
+	}
+	return config, nil
+}
+
+// write 는 s.mu 를 잡은 상태에서 호출한다.
+func (s *Store) write(c *Config) error {
+	data, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(s.path, append(data, '\n'))
 }
 
 // writeFileAtomic 은 쓰는 도중 실패해도 기존 파일이 깨지지 않도록 임시 파일(0600)에 쓴 뒤 바꿔치기한다.

@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import Header from '../components/Header/Header';
 import ConfigEditor from '../components/ConfigEditor/ConfigEditor';
-import LogViewer from '../components/LogViewer/LogViewer';
+import LogViewer, { FileRoot } from '../components/LogViewer/LogViewer';
+import WatchEditor from '../components/WatchEditor/WatchEditor';
 import MarkdownPanel from '../components/MarkdownPanel/MarkdownPanel';
 import ServerCard from '../components/ServerCard/ServerCard';
 import StatusSidebar, { ServerView } from '../components/StatusSidebar/StatusSidebar';
 import { DEFAULT_POLL_INTERVAL_MS } from '../config/schema';
-import { GroupEntry, ProcessEntry } from '../config/types';
+import { GroupEntry, ProcessEntry, WatchStatus } from '../config/types';
 import { useGroupStatus } from '../hooks/useGroupStatus';
 import { useProcessConfig } from '../hooks/useProcessConfig';
 import './Dashboard.css';
@@ -20,10 +21,13 @@ interface DashboardProps {
 }
 
 const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
-  const { config, loading, error, reload, save } = useProcessConfig();
+  const { config, loading, error, reload, save, apply } = useProcessConfig();
   const [filter, setFilter] = useState('');
   const [editorOpen, setEditorOpen] = useState(false);
-  const [logTarget, setLogTarget] = useState<{ process: ProcessEntry; serverLabel: string } | null>(null);
+  /** 열려 있는 로그 · INI 폴더 창 */
+  const [fileTarget, setFileTarget] = useState<{ process: ProcessEntry; serverLabel: string; root: FileRoot } | null>(null);
+  /** 열려 있는 자동 재시작 · 감시 조건 창 */
+  const [watchTarget, setWatchTarget] = useState<{ process: ProcessEntry; serverLabel: string; watch: WatchStatus | undefined } | null>(null);
   /** 검색에 가려진 카드를 골랐을 때, 검색을 지우고 다시 그려진 뒤 스크롤할 대상 */
   const [pendingScrollId, setPendingScrollId] = useState<string | null>(null);
 
@@ -55,7 +59,8 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
   }));
 
   const closeEditor = useCallback(() => setEditorOpen(false), []);
-  const closeLog = useCallback(() => setLogTarget(null), []);
+  const closeFiles = useCallback(() => setFileTarget(null), []);
+  const closeWatch = useCallback(() => setWatchTarget(null), []);
 
   // 다른 그룹으로 이동하면 검색을 지운다.
   useEffect(() => setFilter(''), [slug]);
@@ -169,7 +174,8 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
                         processes={shown}
                         status={serverStatus}
                         state={state}
-                        onShowLog={process => setLogTarget({ process, serverLabel: server.label || server.id })}
+                        onOpenFiles={(process, root) => setFileTarget({ process, serverLabel: server.label || server.id, root })}
+                        onEditWatch={(process, watch) => setWatchTarget({ process, serverLabel: server.label || server.id, watch })}
                         onActionDone={status.refresh}
                       />
                     );
@@ -182,7 +188,21 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
       </div>
 
       {editorOpen && config && <ConfigEditor config={config} onSave={save} onClose={closeEditor} />}
-      {logTarget && <LogViewer process={logTarget.process} serverLabel={logTarget.serverLabel} onClose={closeLog} />}
+      {fileTarget && (
+        <LogViewer process={fileTarget.process} serverLabel={fileTarget.serverLabel} root={fileTarget.root} onClose={closeFiles} />
+      )}
+      {watchTarget && (
+        <WatchEditor
+          process={watchTarget.process}
+          serverLabel={watchTarget.serverLabel}
+          watch={watchTarget.watch}
+          onSaved={next => {
+            apply(next);
+            status.refresh();
+          }}
+          onClose={closeWatch}
+        />
+      )}
     </div>
   );
 };

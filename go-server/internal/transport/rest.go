@@ -51,6 +51,10 @@ func New(cfg *config.Configuration) *RestServer {
 	api.GET("/status", handleStatus(monitor))
 	api.GET("/processes/:id/files", handleFiles(monitor))
 	api.GET("/processes/:id/log", handleLog(monitor))
+	api.GET("/processes/:id/ini", handleReadINI(monitor))
+	api.PUT("/processes/:id/ini", requireJSON, handleWriteINI(monitor))
+	api.PUT("/processes/:id/watch", requireJSON, handleUpdateWatch(store, monitor))
+	api.GET("/processes/:id/watch-test", handleWatchTest(monitor))
 	api.POST("/processes/:id/:action", requireJSON, handleControl(monitor))
 
 	router.NoRoute(middleware.SpaHandler("/api", cfg.SpaDir, cfg.SpaIndex))
@@ -161,10 +165,10 @@ func handleStatus(monitor *processes.Monitor) gin.HandlerFunc {
 	}
 }
 
-// GET /api/processes/:id/files?path=2026-11 : 로그 폴더 아래 폴더의 파일 · 폴더 목록 ( path 를 비우면 로그 폴더 )
+// GET /api/processes/:id/files?root=log|ini&path=2026-11 : 로그 · 설정 폴더 아래 폴더의 목록 ( path 를 비우면 등록한 폴더 )
 func handleFiles(monitor *processes.Monitor) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		list, err := monitor.Files(c.Request.Context(), c.Param("id"), c.Query("path"))
+		list, err := monitor.Files(c.Request.Context(), c.Param("id"), c.DefaultQuery("root", processes.RootLog), c.Query("path"))
 		if err != nil {
 			respondError(c, err)
 			return
@@ -185,6 +189,76 @@ func handleLog(monitor *processes.Monitor) gin.HandlerFunc {
 		}
 		c.Header("Cache-Control", "no-store")
 		c.JSON(http.StatusOK, gin.H{"output": output})
+	}
+}
+
+// GET /api/processes/:id/ini?path=app.ini : 설정 폴더 아래 *.ini 파일 내용과 hash
+func handleReadINI(monitor *processes.Monitor) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		file, err := monitor.ReadINI(c.Request.Context(), c.Param("id"), c.Query("path"))
+		if err != nil {
+			respondError(c, err)
+			return
+		}
+		c.Header("Cache-Control", "no-store")
+		c.JSON(http.StatusOK, file)
+	}
+}
+
+// PUT /api/processes/:id/ini?path=app.ini {"content": "...", "baseHash": "..."} : *.ini 파일 저장 ( 누가 했는지 로그에 남긴다 )
+func handleWriteINI(monitor *processes.Monitor) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var body struct {
+			Content  string `json:"content"`
+			BaseHash string `json:"baseHash"`
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2<<20)
+		if err := c.ShouldBindJSON(&body); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "본문 형식이 올바르지 않습니다: " + err.Error()})
+			return
+		}
+		id, path := c.Param("id"), c.Query("path")
+		file, err := monitor.WriteINI(c.Request.Context(), id, path, body.Content, body.BaseHash)
+		if err != nil {
+			logger.Warnf("[REST] ini write failed: %s %s, remote: %s, err: %v", id, path, c.ClientIP(), err)
+			respondError(c, err)
+			return
+		}
+		logger.Warnf("[REST] ini written: %s %s (%d bytes), remote: %s", id, path, len(body.Content), c.ClientIP())
+		c.JSON(http.StatusOK, file)
+	}
+}
+
+// PUT /api/processes/:id/watch {"autoRestart": true, "watchName": "", "watchArgs": "..."} : 모니터링 화면에서 자동 재시작 설정 변경
+// 응답은 GET /api/config 와 같은 형식의 전체 설정이다.
+func handleUpdateWatch(store *processes.Store, monitor *processes.Monitor) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var update processes.WatchUpdate
+		if err := c.ShouldBindJSON(&update); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "본문 형식이 올바르지 않습니다: " + err.Error()})
+			return
+		}
+		id := c.Param("id")
+		config, err := store.UpdateWatch(id, update)
+		if err != nil {
+			respondError(c, err)
+			return
+		}
+		logger.Warnf("[REST] watch updated: %s %+v, remote: %s", id, update, c.ClientIP())
+		c.JSON(http.StatusOK, processes.Public(config))
+	}
+}
+
+// GET /api/processes/:id/watch-test?name=java&args=app.jar : 감시 조건에 지금 맞는 프로세스 ( 저장 전 확인용 )
+func handleWatchTest(monitor *processes.Monitor) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		instances, err := monitor.WatchTest(c.Request.Context(), c.Param("id"), c.Query("name"), c.Query("args"))
+		if err != nil {
+			respondError(c, err)
+			return
+		}
+		c.Header("Cache-Control", "no-store")
+		c.JSON(http.StatusOK, gin.H{"instances": instances})
 	}
 }
 

@@ -72,7 +72,7 @@ func startSSHServer(t *testing.T, password string) (host string, port int) {
 							req.Reply(true, nil)
 
 							cmd := exec.Command("sh", "-c", payload.Command)
-							cmd.Stdout, cmd.Stderr = channel, channel.Stderr()
+							cmd.Stdin, cmd.Stdout, cmd.Stderr = channel, channel, channel.Stderr()
 							status := 0
 							if err := cmd.Run(); err != nil {
 								status = 1
@@ -105,6 +105,11 @@ func TestMonitorOverSSH(t *testing.T) {
 	os.MkdirAll(filepath.Join(logDir, "old"), 0o755)
 	os.WriteFile(script, []byte("#!/bin/sh\nexec sleep "+marker+"\n"), 0o755)
 	os.WriteFile(filepath.Join(logDir, "app.log"), []byte("line1\nline2\nline3\n"), 0o644)
+	configDir := filepath.Join(dir, "conf")
+	os.MkdirAll(filepath.Join(configDir, "sub"), 0o755)
+	os.WriteFile(filepath.Join(configDir, "app.ini"), []byte("[db]\r\nhost=a\r\n"), 0o640)
+	os.WriteFile(filepath.Join(configDir, "notes.txt"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(configDir, "euckr.ini"), []byte{0xb0, 0xa1, '\n'}, 0o644)
 	t.Cleanup(func() { exec.Command("pkill", "-f", "^sleep "+marker+"$").Run() })
 
 	store := NewStore(filepath.Join(dir, "processes.json"))
@@ -114,7 +119,7 @@ func TestMonitorOverSSH(t *testing.T) {
 			{ID: "local", Group: "uw", Host: host, Port: port, User: "ops", Password: "pw"},
 			{ID: "wrong-pw", Group: "uw", Host: host, Port: port, User: "ops", Password: "nope"},
 		},
-		Processes: []Process{{ID: "app", Server: "local", Match: "^sleep " + marker + "$", LogDir: logDir, StartScript: script,
+		Processes: []Process{{ID: "app", Server: "local", Match: "^sleep " + marker + "$", LogDir: logDir, ConfigDir: configDir, StartScript: script,
 			AutoRestart: true, WatchName: "sleep", WatchArgs: marker}},
 	})
 	if _, err := store.Save(body); err != nil {
@@ -179,15 +184,48 @@ func TestMonitorOverSSH(t *testing.T) {
 	if _, err := monitor.Log(ctx, "app", "../start.sh", 2); !isStatus(err, http.StatusBadRequest) {
 		t.Errorf("log outside logDir: %v", err)
 	}
-	if list, err := monitor.Files(ctx, "app", ""); err != nil || len(list.Entries) != 2 ||
+	if list, err := monitor.Files(ctx, "app", RootLog, ""); err != nil || len(list.Entries) != 2 ||
 		list.Entries[0].Name != "old" || list.Entries[0].Type != "dir" || list.Entries[1].Name != "app.log" || list.Entries[1].Size != 18 {
 		t.Errorf("files = %+v, %v", list, err)
 	}
-	if list, err := monitor.Files(ctx, "app", "old"); err != nil || len(list.Entries) != 0 {
+	if list, err := monitor.Files(ctx, "app", RootLog, "old"); err != nil || len(list.Entries) != 0 {
 		t.Errorf("empty dir = %+v, %v", list, err)
 	}
-	if _, err := monitor.Files(ctx, "app", "app.log"); err == nil {
+	if _, err := monitor.Files(ctx, "app", RootLog, "app.log"); err == nil {
 		t.Error("listing a file should fail")
+	}
+
+	// INI: 폴더와 *.ini 만 보이고, 읽고 쓸 수 있다.
+	if list, err := monitor.Files(ctx, "app", RootINI, ""); err != nil || len(list.Entries) != 3 || list.Entries[0].Name != "sub" {
+		t.Errorf("ini files = %+v, %v", list, err)
+	}
+	ini, err := monitor.ReadINI(ctx, "app", "app.ini")
+	if err != nil || ini.Content != "[db]\r\nhost=a\r\n" {
+		t.Fatalf("read ini = %+v, %v", ini, err)
+	}
+	if _, err := monitor.WriteINI(ctx, "app", "app.ini", "[db]\r\nhost=b\r\n", ini.Hash); err != nil {
+		t.Fatalf("write ini: %v", err)
+	}
+	written, _ := os.ReadFile(filepath.Join(configDir, "app.ini"))
+	backup, _ := os.ReadFile(filepath.Join(configDir, "app.ini.bak"))
+	info, _ := os.Stat(filepath.Join(configDir, "app.ini"))
+	if string(written) != "[db]\r\nhost=b\r\n" || string(backup) != "[db]\r\nhost=a\r\n" || info.Mode().Perm() != 0o640 {
+		t.Errorf("written = %q, backup = %q, mode = %v", written, backup, info.Mode().Perm())
+	}
+	if _, err := os.Stat(filepath.Join(configDir, "app.ini.pm-new")); !os.IsNotExist(err) {
+		t.Errorf("temp file left: %v", err)
+	}
+	if _, err := monitor.WriteINI(ctx, "app", "app.ini", "stale", ini.Hash); !isStatus(err, http.StatusConflict) {
+		t.Errorf("stale write: %v", err)
+	}
+	if _, err := monitor.ReadINI(ctx, "app", "euckr.ini"); !isStatus(err, http.StatusUnprocessableEntity) {
+		t.Errorf("non-utf8: %v", err)
+	}
+	if _, err := monitor.ReadINI(ctx, "app", "notes.txt"); !isStatus(err, http.StatusBadRequest) {
+		t.Errorf("non-ini: %v", err)
+	}
+	if _, err := monitor.ReadINI(ctx, "app", "../logs/app.ini"); !isStatus(err, http.StatusBadRequest) {
+		t.Errorf("outside configDir: %v", err)
 	}
 
 	if _, err := monitor.Control(ctx, "app", "restart"); err != nil {
@@ -239,6 +277,17 @@ func TestMonitorOverSSH(t *testing.T) {
 	waitFor(true)
 	if w := watch(); !w.Healthy || w.Restarts != 1 || w.LastRestartAt == nil || w.LastError != "" {
 		t.Fatalf("auto restart = %+v", w)
+	}
+
+	// 감시 조건 확인: 저장 전에 지금 맞는 프로세스를 본다.
+	if found, err := monitor.WatchTest(ctx, "app", "", "sleep "+marker); err != nil || len(found) != 1 {
+		t.Errorf("watch test = %+v, %v", found, err)
+	}
+	if found, err := monitor.WatchTest(ctx, "app", "java", marker); err != nil || len(found) != 0 {
+		t.Errorf("watch test with wrong name = %+v, %v", found, err)
+	}
+	if _, err := monitor.WatchTest(ctx, "app", " ", ""); !isStatus(err, http.StatusBadRequest) {
+		t.Errorf("empty watch test: %v", err)
 	}
 }
 

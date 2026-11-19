@@ -1,0 +1,57 @@
+.ini-editor {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ini-editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.ini-editor-info {
+  display: inline-flex;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.ini-editor-dirty {
+  color: var(--warning);
+}
+
+.ini-editor-message {
+  margin: 0 16px 8px;
+  padding: 6px 10px;
+  font-size: 0.75rem;
+  color: var(--success);
+  background: rgba(63, 185, 80, 0.1);
+  border-radius: 4px;
+}
+
+.ini-editor-text {
+  flex: 1;
+  min-height: 0;
+  margin: 0 16px 16px;
+  padding: 10px 12px;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre;
+  resize: none;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+  tab-size: 4;
+}
+
+.ini-editor-text:focus {
+  border-color: var(--accent);
+}

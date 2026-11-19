@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ProcessEntry, ServerEntry, ServerStatus, WatchStatus } from '../../config/types';
 import { ServerState } from '../StatusSidebar/StatusSidebar';
+import { FileRoot } from '../LogViewer/LogViewer';
 import { requestApi } from '../../hooks/useProcessConfig';
 import './ServerCard.css';
 
@@ -12,7 +13,10 @@ interface ServerCardProps {
   status: ServerStatus | undefined;
   /** 상태 점 색 (사이드바와 같은 값) */
   state: ServerState;
-  onShowLog: (process: ProcessEntry) => void;
+  /** 로그 · INI 폴더 창을 연다. */
+  onOpenFiles: (process: ProcessEntry, root: FileRoot) => void;
+  /** 자동 재시작 · 감시 조건 창을 연다. */
+  onEditWatch: (process: ProcessEntry, watch: WatchStatus | undefined) => void;
   /** 시작 · 중지가 끝나면 호출한다. (상태 새로고침) */
   onActionDone: () => void;
 }
@@ -27,7 +31,7 @@ const ACTION_TEXT: Record<Action, string> = { start: '시작', stop: '중지', r
 const autoRestartBadge = (process: ProcessEntry, watch: WatchStatus | undefined) => {
   if (!process.autoRestart || !watch) return null;
   const detail = [
-    `감시: ${process.watchName}${process.watchArgs ? ` (명령줄에 "${process.watchArgs}" 포함)` : ''}`,
+    `감시: ${[process.watchName && `실행 파일 ${process.watchName}`, process.watchArgs && `명령줄에 "${process.watchArgs}" 포함`].filter(Boolean).join(', ')}`,
     `자동 시작 ${watch.restarts}회${watch.lastRestartAt ? ` · 마지막 ${new Date(watch.lastRestartAt).toLocaleString()}` : ''}`,
     watch.lastError && `오류: ${watch.lastError}`,
   ]
@@ -40,7 +44,7 @@ const autoRestartBadge = (process: ProcessEntry, watch: WatchStatus | undefined)
 };
 
 /** 서버 하나의 SSH 접속 상태와, 그 서버에서 확인한 프로세스별 실행 상태 · 로그 · 시작/중지 버튼 */
-const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, state: serverState, onShowLog, onActionDone }) => {
+const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, state: serverState, onOpenFiles, onEditWatch, onActionDone }) => {
   /** 프로세스 id → 진행 중인 동작 */
   const [busy, setBusy] = useState<Record<string, Action>>({});
   const [message, setMessage] = useState<{ kind: 'error' | 'info'; text: string } | null>(null);
@@ -119,9 +123,13 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, stat
                       {known && !running && <span className="server-card-badge">STOPPED</span>}
                     </div>
                     {badge && (
-                      <div className={`server-card-watch server-card-watch-${badge.kind}`} title={badge.title}>
+                      <button
+                        className={`server-card-watch server-card-watch-${badge.kind}`}
+                        title={`${badge.title}\n(눌러서 바꾸기)`}
+                        onClick={() => onEditWatch(process, processStatus?.watch)}
+                      >
                         ↻ {badge.text}
-                      </div>
+                      </button>
                     )}
                   </td>
                   <td className="server-card-mono" title={instances.map(i => `${i.pid}: ${i.command}`).join('\n')}>
@@ -136,8 +144,23 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, stat
                         <span className="server-card-busy">{ACTION_TEXT[action]} 중...</span>
                       ) : (
                         <>
-                          <button className="btn-text" onClick={() => onShowLog(process)} disabled={!process.logDir} title={process.logDir || '로그 폴더가 등록되지 않았습니다'}>
+                          <button className="btn-text" onClick={() => onOpenFiles(process, 'log')} disabled={!process.logDir} title={process.logDir || '로그 폴더가 등록되지 않았습니다'}>
                             로그
+                          </button>
+                          <button
+                            className="btn-text"
+                            onClick={() => onOpenFiles(process, 'ini')}
+                            disabled={!process.configDir}
+                            title={process.configDir || '설정(INI) 폴더가 등록되지 않았습니다'}
+                          >
+                            INI
+                          </button>
+                          <button
+                            className="btn-text"
+                            onClick={() => onEditWatch(process, processStatus?.watch)}
+                            title="자동 재시작 · 감시 조건"
+                          >
+                            감시
                           </button>
                           {known && !running && (
                             <button className="btn-text btn-text-ok" onClick={() => runAction(process, 'start')} disabled={!process.startScript} title={process.startScript || '시작 스크립트가 등록되지 않았습니다'}>

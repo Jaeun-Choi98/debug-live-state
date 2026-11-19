@@ -57,5 +57,8 @@ export function useProcessConfig() {
     );
   }, []);
 
-  return { config, loading, error, reload, save };
+  /** 다른 API(예: PUT /api/processes/:id/watch)가 돌려준 저장된 설정으로 화면을 갱신한다. */
+  const apply = useCallback((next: ProcessConfig) => setConfig(next), []);
+
+  return { config, loading, error, reload, save, apply };
 }

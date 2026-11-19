@@ -3,7 +3,7 @@
 화면(브라우저)은 사이트 서버(Go 서버)의 API 만 호출합니다. Go 서버가 각 서버에 SSH 로 접속해 정해진 명령만 실행합니다.
 
 ```
-브라우저 ──HTTP──▶ Go 서버 (/api) ──SSH (비밀번호)──▶ 각 서버: ps / ls / tail / kill / 시작 스크립트
+브라우저 ──HTTP──▶ Go 서버 (/api) ──SSH (비밀번호)──▶ 각 서버: ps / ls / tail / cat (INI) / kill / 시작 스크립트
                     └ 자동 재시작 감시 (watchIntervalMs 마다)
 ```
 
@@ -21,8 +21,10 @@
 | 용도 | 명령 |
 |---|---|
 | 상태 확인 | `LC_ALL=C ps -eo pid=,pcpu=,pmem=,etime=,args=` (서버마다 2초에 최대 1번, 여러 사람이 봐도 공유) |
-| 로그 폴더 목록 | `cd -- '<로그 폴더>/<경로>'` 후 `LC_ALL=C ls -lAnt` (최대 1000개) |
+| 로그 · INI 폴더 목록 | `cd -- '<폴더>/<경로>'` 후 `LC_ALL=C ls -lAnt` (최대 1000개) |
 | 로그 | `tail -n <줄 수> -- '<로그 폴더>/<경로>'` |
+| INI 읽기 | `wc -c` 로 1MB 이하인지 본 뒤 `cat -- '<INI 폴더>/<경로>'` |
+| INI 쓰기 | 받은 내용을 `<파일>.pm-new` 에 쓰고 크기가 맞는지 확인 → `cp -p` 로 `<파일>.bak` 백업 → `cat <파일>.pm-new > <파일>` (권한 · 소유자 유지) → 임시 파일 삭제 |
 | 중지 | `kill -TERM <PID ...>` (PID 는 ps 결과에서 match 정규식으로 찾은 값) |
 | 시작 | 아래 명령 (스크립트가 있는 폴더에서 백그라운드로 실행, 출력은 버림) |
 
@@ -37,8 +39,9 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 ### 자동 재시작
 
 `autoRestart` 를 켠 프로세스는 Go 서버가 `watchIntervalMs`(기본 10초)마다 확인합니다. (ps 결과는 화면 조회와 공유)
+`autoRestart` · `watchName` · `watchArgs` 는 모니터링 화면의 **감시** 창에서 바꿉니다. (`PUT /api/processes/:id/watch`)
 
-- **감시 프로세스**: ps 명령줄 첫 단어의 파일 이름이 `watchName` 과 같고, 명령줄에 `watchArgs` 가 들어 있는 프로세스. 화면 표시용 `match` 와 별개입니다.
+- **감시 프로세스**: ps 명령줄 첫 단어의 파일 이름이 `watchName` 과 같고, 명령줄에 `watchArgs` 가 들어 있는 프로세스. 비워 둔 조건은 보지 않습니다. 화면 표시용 `match` 와 별개입니다.
 - 감시 프로세스가 없으면 시작 스크립트를 실행합니다(위 시작 명령). 그 뒤 `restartDelayMs`(기본 30초) 동안은 뜨기를 기다리고, 그래도 없으면 횟수 제한 없이 다시 실행합니다.
 - 화면에서 **stop** 하면 **start** · **restart** 할 때까지 자동 재시작을 멈춥니다. 화면에서 시작해도 `restartDelayMs` 동안은 자동으로 다시 실행하지 않습니다.
 - 두 값은 설정 파일에서 매번 읽으므로, 저장하면 다음 확인부터 바로 적용됩니다.
@@ -90,8 +93,9 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 | processes[].label | | 표시 이름 (없으면 id) |
 | processes[].match | O | ps 명령줄(args)에 대한 정규식 (Go RE2 문법) |
 | processes[].logDir | | 로그 폴더 절대 경로 (영문 · 숫자 · `. _ - /`) |
+| processes[].configDir | | INI 폴더 절대 경로 (영문 · 숫자 · `. _ - /`). 이 폴더 아래 *.ini 를 읽고 고칩니다 |
 | processes[].startScript | | 시작 스크립트 절대 경로 (영문 · 숫자 · `. _ - /`) |
-| processes[].autoRestart | | `true` 면 자동 재시작. `watchName` · `startScript` 필요 |
+| processes[].autoRestart | | `true` 면 자동 재시작. `startScript` 와, `watchName` · `watchArgs` 중 하나 이상 필요 |
 | processes[].watchName | | 감시 프로세스의 실행 파일 이름 (경로 · 공백 없이, 정확히 일치) |
 | processes[].watchArgs | | 감시 프로세스 명령줄에 들어 있어야 하는 문자열 (정규식 아님) |
 
@@ -128,13 +132,13 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 ```
 
 - `instances` 가 비어 있으면 중지된 프로세스입니다.
-- `watch` 는 `watchName` 을 등록한 프로세스에만 있습니다. `healthy` 감시 프로세스가 지금 있는지, `paused` 화면에서 중지해 자동 재시작이 멈췄는지, `restarts` Go 서버가 켜진 뒤 자동으로 시작한 횟수, `lastRestartAt` 마지막 자동 시작 시각, `lastError` 마지막 자동 시작 · 확인 오류.
+- `watch` 는 `watchName` 이나 `watchArgs` 를 등록한 프로세스에만 있습니다. `healthy` 감시 프로세스가 지금 있는지, `paused` 화면에서 중지해 자동 재시작이 멈췄는지, `restarts` Go 서버가 켜진 뒤 자동으로 시작한 횟수, `lastRestartAt` 마지막 자동 시작 시각, `lastError` 마지막 자동 시작 · 확인 오류.
 - SSH 접속에 실패한 서버는 `error` 에 이유가 들어가고, 나머지 서버의 결과는 그대로 옵니다. (응답은 `200`)
 - 없는 그룹이면 `404`
 
-### GET /api/processes/:id/files?path=2026-11
+### GET /api/processes/:id/files?root=log&path=2026-11
 
-로그 폴더 아래 `path` 폴더(로그 폴더 기준 상대 경로, 비우면 로그 폴더)의 파일 · 폴더 목록입니다. 폴더가 먼저, 그 안에서는 최근 수정 순입니다.
+`root` 폴더(`log` 로그 폴더, 기본값 · `ini` INI 폴더) 아래 `path` 폴더(상대 경로, 비우면 등록한 폴더)의 목록입니다. 폴더가 먼저, 그 안에서는 최근 수정 순입니다. `root=ini` 면 폴더와 `*.ini` 만 보여줍니다.
 
 ```json
 {
@@ -153,7 +157,7 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 
 | 상태 코드 | 의미 |
 |---|---|
-| `400` | 로그 폴더가 등록되지 않음, 또는 `..` · 빈 구간 · 작은따옴표 · 제어 문자가 들어간 경로 |
+| `400` | 폴더가 등록되지 않음, 알 수 없는 `root`, 또는 `..` · 빈 구간 · 작은따옴표 · 제어 문자가 들어간 경로 |
 | `404` | 없는 프로세스 |
 | `502` | SSH 실패, 폴더가 없거나 폴더가 아님, 권한 없음 |
 
@@ -166,6 +170,47 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 | `400` | 로그 폴더가 등록되지 않음, `path` 없음, 잘못된 경로 (위와 같음) |
 | `404` | 없는 프로세스 |
 | `502` | SSH 실패 또는 tail 실패 (파일 없음 · 권한 없음 등, 서버의 오류 문구 포함) |
+
+### GET /api/processes/:id/ini?path=env/app.ini
+
+INI 폴더 아래 `path` 파일(`.ini` 로 끝나야 함)을 통째로 읽습니다. 응답 `200` `{"content": "...", "hash": "<sha256>"}`
+
+| 상태 코드 | 의미 |
+|---|---|
+| `400` | INI 폴더가 등록되지 않음, `.ini` 가 아님, 잘못된 경로 |
+| `404` | 없는 프로세스 |
+| `422` | UTF-8 이 아닌 파일 (EUC-KR 등). 그대로 저장하면 글자가 깨지므로 열지 않습니다 |
+| `502` | SSH 실패, 파일 없음 · 권한 없음, 1MB 초과 |
+
+### PUT /api/processes/:id/ini?path=env/app.ini
+
+파일 내용을 바꿉니다. 본문 `{"content": "...", "baseHash": "<읽을 때 받은 hash>"}`, 응답은 GET 과 같은 형식(새 hash)입니다.
+
+- 지금 파일의 hash 가 `baseHash` 와 다르면(연 뒤 다른 곳에서 바뀌었으면) 덮어쓰지 않고 `409` 입니다.
+- 바꾸기 전 내용은 같은 폴더의 `<파일>.bak` 에 남깁니다. (매번 덮어씀, 한 단계만 보관)
+- 줄바꿈은 받은 그대로 씁니다. 화면은 원래 CRLF 였던 파일을 CRLF 로 되돌려 보냅니다.
+- 요청한 IP 와 크기를 서버 로그에 남깁니다.
+
+| 상태 코드 | 의미 |
+|---|---|
+| `400` | 위 GET 과 같음, 본문 형식 오류 |
+| `409` | 연 뒤 다른 곳에서 바뀜, 같은 파일을 저장하는 중 |
+| `413` | 1MB 초과 |
+| `502` | SSH 실패, 쓰기 권한 없음(폴더에도 쓰기 권한이 필요), 내용을 끝까지 받지 못함 |
+
+### PUT /api/processes/:id/watch
+
+모니터링 화면의 **감시** 창에서 프로세스 하나의 자동 재시작 설정만 바꿉니다. 본문 `{"autoRestart": true, "watchName": "", "watchArgs": "-jar /opt/app/app.jar"}`.
+응답은 `GET /api/config` 와 같은 형식의 전체 설정입니다.
+
+| 상태 코드 | 의미 |
+|---|---|
+| `400` | 감시 조건이 없음, 시작 스크립트가 없음 등 (`"watchArgs: ..."` 형식) |
+| `404` | 없는 프로세스 |
+
+### GET /api/processes/:id/watch-test?name=java&args=app.jar
+
+감시 조건(`name` 감시 이름 · `args` 감시 문자열, 하나 이상)에 지금 서버의 ps 에서 맞는 프로세스를 돌려줍니다. 저장 전 확인용입니다. 응답 `200` `{"instances": [{ "pid": 4321, ... }]}`
 
 ### POST /api/processes/:id/start · stop · restart
 

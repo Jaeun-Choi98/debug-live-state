@@ -2,6 +2,7 @@ package processes
 
 import (
 	"context"
+	"net/http"
 	"path"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 //	계속 뜨지 않으면 재시작 대기마다 횟수 제한 없이 다시 시작한다. 두 값은 설정 파일에서 매번 읽으므로 저장하면 바로 반영된다.
 //
 //	감시 프로세스: ps 명령줄 첫 단어의 파일 이름이 watchName 과 같고, 명령줄에 watchArgs 가 들어 있는 프로세스.
+//	둘 중 비워 둔 조건은 보지 않는다. (둘 다 비우면 감시하지 않는다)
 //	화면 표시용 match 정규식과 따로 두어, 자동으로 실행할지는 정확한 비교로만 정한다.
 const (
 	defaultWatchInterval = 10 * time.Second
@@ -104,7 +106,7 @@ func (m *Monitor) watchOnce(ctx context.Context) time.Duration {
 	}
 	watched := map[string][]Process{}
 	for _, p := range config.Processes {
-		if p.AutoRestart && p.WatchName != "" && p.StartScript != "" {
+		if p.AutoRestart && p.watches() && p.StartScript != "" {
 			watched[p.Server] = append(watched[p.Server], p)
 		}
 	}
@@ -170,9 +172,9 @@ func (m *Monitor) watchProcess(ctx context.Context, server Server, process Proce
 	}
 }
 
-// watchStatus 는 상태 응답에 넣을 감시 상태다. 감시 프로세스를 등록하지 않았으면 nil.
+// watchStatus 는 상태 응답에 넣을 감시 상태다. 감시 조건을 등록하지 않았으면 nil.
 func (m *Monitor) watchStatus(process Process, rows []Instance) *WatchStatus {
-	if process.WatchName == "" {
+	if !process.watches() {
 		return nil
 	}
 	status := &WatchStatus{Healthy: len(watchInstances(process, rows)) > 0}
@@ -191,10 +193,14 @@ func (m *Monitor) watchStatus(process Process, rows []Instance) *WatchStatus {
 	return status
 }
 
-// watchInstances 는 감시 프로세스(실행 파일 이름 = watchName, 명령줄에 watchArgs 포함)를 고른다.
+// watches 는 감시 조건(감시 이름 · 감시 문자열)이 하나라도 있는지다.
+func (p Process) watches() bool { return p.WatchName != "" || p.WatchArgs != "" }
+
+// watchInstances 는 감시 프로세스(실행 파일 이름 = watchName, 명령줄에 watchArgs 포함)를 고른다. 비워 둔 조건은 보지 않는다.
+// 상태 확인용으로 실행한 ps 자체와 PID 1 은 제외한다.
 func watchInstances(process Process, rows []Instance) []Instance {
 	instances := []Instance{}
-	if process.WatchName == "" {
+	if !process.watches() {
 		return instances
 	}
 	for _, row := range rows {
@@ -202,9 +208,28 @@ func watchInstances(process Process, rows []Instance) []Instance {
 		if row.PID <= 1 || len(fields) == 0 || strings.Contains(row.Command, psArgs) {
 			continue
 		}
-		if path.Base(fields[0]) == process.WatchName && strings.Contains(row.Command, process.WatchArgs) {
+		nameOK := process.WatchName == "" || path.Base(fields[0]) == process.WatchName
+		if nameOK && strings.Contains(row.Command, process.WatchArgs) {
 			instances = append(instances, row)
 		}
 	}
 	return instances
+}
+
+// WatchTest 는 감시 조건(name · args)으로 지금 서버의 ps 에서 찾은 프로세스를 돌려준다.
+// 모니터링 화면에서 감시 조건을 저장하기 전에 맞는 프로세스를 확인하는 데 쓴다.
+func (m *Monitor) WatchTest(ctx context.Context, processID, name, args string) ([]Instance, error) {
+	_, server, err := m.find(processID)
+	if err != nil {
+		return nil, err
+	}
+	process := Process{WatchName: strings.TrimSpace(name), WatchArgs: strings.TrimSpace(args)}
+	if !process.watches() {
+		return nil, &UserError{http.StatusBadRequest, "감시 이름이나 감시 문자열을 적어야 합니다"}
+	}
+	snapshot := m.ps(ctx, server, false)
+	if snapshot.err != nil {
+		return nil, snapshot.err
+	}
+	return watchInstances(process, snapshot.rows), nil
 }

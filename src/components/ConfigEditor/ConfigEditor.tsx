@@ -13,8 +13,10 @@ interface ConfigEditorProps {
 type Section = 'groups' | 'servers' | 'processes';
 
 /**
- * 편집 중인 한 행. 입력칸 값을 문자열 그대로 들고 있다가 검사 · 저장할 때 변환한다. (체크박스는 'true' / '')
+ * 편집 중인 한 행. 입력칸 값을 문자열 그대로 들고 있다가 검사 · 저장할 때 변환한다. (autoRestart 는 'true' / '')
  * key 는 React 용이다. (id 는 편집되므로 key 로 쓸 수 없다)
+ * 프로세스의 autoRestart · watchName · watchArgs 는 모니터링 화면에서 바꾸므로 열은 없지만,
+ * 저장할 때 지워지지 않도록 행에 그대로 들고 있다.
  */
 type Row = Record<string, string>;
 
@@ -22,7 +24,7 @@ interface Column {
   field: string;
   title: string;
   placeholder?: string;
-  type?: 'number' | 'password' | 'select' | 'checkbox';
+  type?: 'number' | 'password' | 'select';
   className?: string;
 }
 
@@ -55,18 +57,16 @@ const SECTIONS: { section: Section; title: string; description: string; columns:
     section: 'processes',
     title: '프로세스',
     description:
-      'match 는 화면에 보여줄 프로세스를 찾는 ps 명령줄 정규식입니다. 로그 폴더 · 시작 스크립트는 셸 특수문자가 없는 절대 경로로 적습니다. ' +
-      '자동 재시작을 켜면 감시 이름(실행 파일 이름, 정확히 일치)과 감시 문자열(명령줄에 포함)로 찾은 프로세스가 없을 때 시작 스크립트를 실행합니다.',
+      'match 는 화면에 보여줄 프로세스를 찾는 ps 명령줄 정규식입니다. 로그 폴더 · INI 폴더 · 시작 스크립트는 셸 특수문자가 없는 절대 경로로 적습니다. ' +
+      '자동 재시작과 감시 문자열은 모니터링 화면의 각 프로세스 [감시] 에서 바꿉니다.',
     columns: [
       { field: 'id', title: 'id *' },
       { field: 'server', title: '서버 *', type: 'select' },
       { field: 'label', title: '표시 이름' },
       { field: 'match', title: 'match (정규식) *', placeholder: 'java .*app\\.jar', className: 'config-editor-col-wide' },
       { field: 'logDir', title: '로그 폴더', placeholder: '/opt/app/logs', className: 'config-editor-col-wide' },
+      { field: 'configDir', title: 'INI 폴더', placeholder: '/opt/app/conf', className: 'config-editor-col-wide' },
       { field: 'startScript', title: '시작 스크립트', placeholder: '/opt/app/start.sh', className: 'config-editor-col-wide' },
-      { field: 'autoRestart', title: '자동 재시작', type: 'checkbox', className: 'config-editor-col-narrow' },
-      { field: 'watchName', title: '감시 이름', placeholder: 'java' },
-      { field: 'watchArgs', title: '감시 문자열', placeholder: '/opt/app/app.jar', className: 'config-editor-col-wide' },
     ],
   },
 ];
@@ -95,6 +95,7 @@ const toRows = (config: ProcessConfig): Record<Section, Row[]> => ({
     match: p.match,
     // 예전 설정(logFile: 로그 파일 하나)을 가져오면 그 파일이 있는 폴더를 쓴다.
     logDir: p.logDir ?? (p as { logFile?: string }).logFile?.replace(/\/[^/]*$/, '') ?? '',
+    configDir: p.configDir ?? '',
     startScript: p.startScript ?? '',
     autoRestart: p.autoRestart ? 'true' : '',
     watchName: p.watchName ?? '',
@@ -172,10 +173,10 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) 
         label: text(r.label),
         match: r.match.trim(),
         logDir: text(r.logDir),
+        configDir: text(r.configDir),
         startScript: text(r.startScript),
         autoRestart: r.autoRestart === 'true' || undefined,
         watchName: text(r.watchName),
-        // 앞뒤 공백도 비교 대상일 수 있지만, 실수로 넣은 경우가 더 많으므로 잘라낸다.
         watchArgs: text(r.watchArgs),
       })),
     });
@@ -231,6 +232,7 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) 
           label: '',
           match: '',
           logDir: '',
+          configDir: '',
           startScript: '',
           autoRestart: '',
           watchName: '',
@@ -370,14 +372,7 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) 
                           updateRow(section, row.key, field, e.target.value);
                         return (
                           <td key={field} className={className}>
-                            {type === 'checkbox' ? (
-                              <input
-                                className={`config-editor-checkbox${invalidFields.has(`${section}.${i}.${field}`) ? ' config-editor-input-invalid' : ''}`}
-                                type="checkbox"
-                                checked={row[field] === 'true'}
-                                onChange={e => updateRow(section, row.key, field, e.target.checked ? 'true' : '')}
-                              />
-                            ) : type === 'select' ? (
+                            {type === 'select' ? (
                               <select className={fieldClass} value={row[field]} onChange={onChange}>
                                 {!selectOptions[field].includes(row[field]) && <option value={row[field]}>{row[field] || '선택'}</option>}
                                 {selectOptions[field].map(option => (

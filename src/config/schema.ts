@@ -93,7 +93,7 @@ export function validateProcessConfig(raw: unknown): ValidationResult {
     }
     if (!validPattern) errors.push(`${at}.match: 올바른 정규식이 필요합니다`);
 
-    for (const field of ['logDir', 'startScript'] as const) {
+    for (const field of ['logDir', 'configDir', 'startScript'] as const) {
       if (process[field] !== undefined && !isSafePath(process[field])) {
         errors.push(`${at}.${field}: 영문 · 숫자 · . _ - / 로 된 절대 경로가 필요합니다`);
       }
@@ -104,11 +104,11 @@ export function validateProcessConfig(raw: unknown): ValidationResult {
     }
     if (process.watchName !== undefined && !(typeof process.watchName === 'string' && /^[^/\s]+$/.test(process.watchName))) {
       errors.push(`${at}.watchName: 경로 · 공백 없는 실행 파일 이름이 필요합니다 (예: java)`);
-    } else if (process.autoRestart === true && process.watchName === undefined) {
-      errors.push(`${at}.watchName: 자동 재시작에는 감시 프로세스 이름이 필요합니다`);
     }
     if (process.watchArgs !== undefined && typeof process.watchArgs !== 'string') {
       errors.push(`${at}.watchArgs: 문자열이어야 합니다`);
+    } else if (process.autoRestart === true && process.watchName === undefined && process.watchArgs === undefined) {
+      errors.push(`${at}.watchArgs: 자동 재시작에는 감시 이름이나 감시 문자열이 필요합니다`);
     }
     if (process.autoRestart === true && process.startScript === undefined) {
       errors.push(`${at}.startScript: 자동 재시작에는 시작 스크립트가 필요합니다`);

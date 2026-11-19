@@ -37,6 +37,11 @@ func newRemote(knownHostsPath string) *remote {
 // run 은 server 에서 command 를 실행하고 표준 출력을 돌려준다.
 // 종료 코드가 0 이 아니면 표준 에러 내용을 담은 에러를 돌려준다.
 func (r *remote) run(ctx context.Context, server Server, command string) (string, error) {
+	return r.runInput(ctx, server, command, nil)
+}
+
+// runInput 은 input 을 명령의 표준 입력으로 보낸다. (nil 이면 보내지 않는다)
+func (r *remote) runInput(ctx context.Context, server Server, command string, input []byte) (string, error) {
 	key := fmt.Sprintf("%s@%s|%x", server.User, server.addr(), sha256.Sum256([]byte(server.Password)))
 
 	var session *ssh.Session
@@ -60,6 +65,9 @@ func (r *remote) run(ctx context.Context, server Server, command string) (string
 	var stdout, stderr bytes.Buffer
 	session.Stdout = &stdout
 	session.Stderr = &stderr
+	if input != nil {
+		session.Stdin = bytes.NewReader(input)
+	}
 
 	done := make(chan error, 1)
 	go func() { done <- session.Run(command) }()
