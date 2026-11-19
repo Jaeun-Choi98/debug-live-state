@@ -6,7 +6,7 @@
   padding: 14px 16px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
   /* 사이드바에서 이동했을 때 sticky 헤더(52px)에 가려지지 않게 한다. */
   scroll-margin-top: 68px;
 }
@@ -32,7 +32,7 @@
 
 .server-card-host {
   overflow: hidden;
-  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.72rem;
   color: var(--text-muted);
   text-overflow: ellipsis;
@@ -49,22 +49,22 @@
 .server-card-error,
 .server-card-message {
   padding: 6px 10px;
-  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.75rem;
   white-space: pre-wrap;
   word-break: break-word;
-  border-radius: 4px;
+  border-radius: var(--radius);
 }
 
 .server-card-error,
 .server-card-message-error {
   color: var(--error);
-  background: rgba(248, 81, 73, 0.1);
+  background: var(--error-bg);
 }
 
 .server-card-message-info {
   color: var(--success);
-  background: rgba(63, 185, 80, 0.1);
+  background: var(--success-bg);
 }
 
 .server-card-placeholder {
@@ -125,17 +125,17 @@
   color: var(--error);
   letter-spacing: 0.05em;
   border: 1px solid var(--error);
-  border-radius: 4px;
+  border-radius: var(--radius);
 }
 
 .server-card-mono {
-  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.75rem;
   white-space: nowrap;
 }
 
 .server-card-num {
-  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.75rem;
   text-align: right;
   white-space: nowrap;

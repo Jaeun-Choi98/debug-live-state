@@ -6,7 +6,7 @@
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(1, 4, 9, 0.7);
+  background: var(--overlay);
 }
 
 .log-viewer {
@@ -16,8 +16,8 @@
   height: 100%;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
 }
 
 .log-viewer-header {
@@ -71,12 +71,12 @@
 .log-viewer-error {
   margin: 0 16px 8px;
   padding: 6px 10px;
-  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.75rem;
   color: var(--error);
   white-space: pre-wrap;
-  background: rgba(248, 81, 73, 0.1);
-  border-radius: 4px;
+  background: var(--error-bg);
+  border-radius: var(--radius);
 }
 
 .log-viewer-body {
@@ -85,14 +85,14 @@
   margin: 0 16px 16px;
   padding: 10px 12px;
   overflow: auto;
-  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.75rem;
   line-height: 1.5;
   color: var(--text);
   white-space: pre;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
 }
 
 .log-viewer-pathbar {
@@ -116,7 +116,7 @@
   margin: 10px 16px 16px;
   overflow: auto;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
 }
 
 .log-viewer-placeholder {
@@ -152,7 +152,7 @@
 }
 
 .log-viewer-file-name {
-  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-family: var(--font-mono);
   text-align: left;
   word-break: break-all;
 }
@@ -167,7 +167,7 @@
 }
 
 .log-viewer-modified {
-  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-family: var(--font-mono);
   color: var(--text-muted);
   white-space: pre;
 }
@@ -189,13 +189,13 @@
 .log-viewer-kind {
   padding: 1px 6px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius);
 }
 
 /* 등록한 패턴 · 연 파일 경로 */
 .log-viewer-patterns {
   min-width: 0;
-  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-family: var(--font-mono);
   color: var(--text-muted);
   white-space: pre-wrap;
   word-break: break-all;

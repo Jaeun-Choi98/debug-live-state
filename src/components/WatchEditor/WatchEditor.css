@@ -6,7 +6,7 @@
   align-items: center;
   justify-content: center;
   padding: 24px 16px;
-  background: rgba(1, 4, 9, 0.7);
+  background: var(--overlay);
 }
 
 .watch-editor {
@@ -16,8 +16,8 @@
   max-height: 100%;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
 }
 
 .watch-editor-header,
@@ -65,7 +65,7 @@
   color: var(--text-muted);
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
 }
 
 .watch-editor-check {
@@ -82,7 +82,7 @@
 }
 
 .watch-editor-field input {
-  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-family: var(--font-mono);
 }
 
 .watch-editor-field small {
@@ -101,12 +101,12 @@
   margin: 0;
   padding: 8px 10px;
   overflow: auto;
-  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.72rem;
   list-style: none;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
 }
 
 .watch-editor-found li {
@@ -124,6 +124,6 @@
   padding: 6px 10px;
   color: var(--error);
   white-space: pre-wrap;
-  background: rgba(248, 81, 73, 0.1);
-  border-radius: 4px;
+  background: var(--error-bg);
+  border-radius: var(--radius);
 }

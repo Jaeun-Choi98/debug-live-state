@@ -31,7 +31,7 @@
   font-size: 0.875rem;
   text-align: center;
   border: 1px dashed var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 .server-grid {
@@ -91,7 +91,7 @@
   line-height: 18px;
   color: var(--text-muted);
   background: var(--surface-2);
-  border-radius: 9px;
+  border-radius: var(--radius);
 }
 
 .server-group-title a {

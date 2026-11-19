@@ -30,8 +30,8 @@
   padding: 6px 10px;
   font-size: 0.75rem;
   color: var(--success);
-  background: rgba(63, 185, 80, 0.1);
-  border-radius: 4px;
+  background: var(--success-bg);
+  border-radius: var(--radius);
 }
 
 .ini-editor-text {
@@ -39,7 +39,7 @@
   min-height: 0;
   margin: 0 16px 16px;
   padding: 10px 12px;
-  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.78rem;
   line-height: 1.5;
   color: var(--text);
@@ -47,7 +47,7 @@
   resize: none;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   outline: none;
   tab-size: 4;
 }

@@ -6,7 +6,7 @@
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(1, 4, 9, 0.7);
+  background: var(--overlay);
 }
 
 .config-editor {
@@ -16,8 +16,8 @@
   max-height: 100%;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
 }
 
 .config-editor-header,
@@ -119,7 +119,7 @@ select.config-editor-input {
 .config-editor-input-invalid,
 .config-editor-input-invalid:focus {
   border-color: var(--error);
-  box-shadow: 0 0 0 3px rgba(248, 81, 73, 0.15);
+  box-shadow: none;
 }
 
 .config-editor-remove:hover:not(:disabled) {
