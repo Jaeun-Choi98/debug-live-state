@@ -1,0 +1,121 @@
+.markdown-panel {
+  margin-bottom: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.markdown-panel-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 10px 14px;
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+}
+
+.markdown-panel-toggle:hover {
+  background: var(--surface-2);
+}
+
+.markdown-panel-caret {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+/* ── README 본문 (마크다운) ─────────────────────────── */
+.markdown-panel-body {
+  padding: 4px 18px 14px;
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--text);
+  border-top: 1px solid var(--border);
+}
+
+.markdown-panel-body h1,
+.markdown-panel-body h2,
+.markdown-panel-body h3,
+.markdown-panel-body h4 {
+  margin: 16px 0 6px;
+  line-height: 1.3;
+}
+
+.markdown-panel-body h1 { font-size: 1.15rem; }
+.markdown-panel-body h2 { font-size: 1rem; }
+.markdown-panel-body h3 { font-size: 0.9rem; color: var(--accent); }
+.markdown-panel-body h4 { font-size: 0.85rem; color: var(--text-muted); }
+
+.markdown-panel-body p,
+.markdown-panel-body ul,
+.markdown-panel-body ol,
+.markdown-panel-body blockquote,
+.markdown-panel-body pre,
+.markdown-panel-body table {
+  margin: 6px 0;
+}
+
+.markdown-panel-body ul,
+.markdown-panel-body ol {
+  padding-left: 22px;
+}
+
+.markdown-panel-body a {
+  color: var(--accent);
+}
+
+.markdown-panel-body code {
+  padding: 1px 5px;
+  font-size: 0.8rem;
+  background: var(--surface-2);
+  border-radius: 4px;
+}
+
+.markdown-panel-body pre {
+  padding: 10px 12px;
+  overflow-x: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.markdown-panel-body pre code {
+  padding: 0;
+  background: none;
+}
+
+.markdown-panel-body blockquote {
+  padding: 2px 12px;
+  color: var(--text-muted);
+  border-left: 3px solid var(--border);
+}
+
+.markdown-panel-body hr {
+  margin: 12px 0;
+  border: none;
+  border-top: 1px solid var(--border);
+}
+
+.markdown-panel-body table {
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.markdown-panel-body th,
+.markdown-panel-body td {
+  padding: 5px 10px;
+  text-align: left;
+  border: 1px solid var(--border);
+}
+
+.markdown-panel-body th {
+  background: var(--surface-2);
+}

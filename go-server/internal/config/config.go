@@ -25,6 +25,9 @@ type Configuration struct {
 	SpaDir   string
 	SpaIndex string
 
+	// 화면에서 수정한 엔드포인트 설정을 저장하는 파일 ( 재배포 시 build 를 교체해도 유지되도록 build 밖에 둔다 )
+	EndpointsFile string
+
 	// log
 	LogLevel string
 
@@ -47,7 +50,9 @@ func NewConfiguration() (*Configuration, error) {
 		SSLKEY:   rest.Key("SSLKEY").MustString(""),
 		SpaDir:   cfgFile.Section("SPA").Key("DIR").MustString("build"),
 		SpaIndex: cfgFile.Section("SPA").Key("INDEX").MustString("index.html"),
-		LogLevel: cfgFile.Section("LOG").Key("LEVEL").MustString("INFO"),
+
+		EndpointsFile: cfgFile.Section("ENDPOINTS").Key("FILE").MustString("./data/endpoints.json"),
+		LogLevel:      cfgFile.Section("LOG").Key("LEVEL").MustString("INFO"),
 
 		DeployMode: cfgFile.Section("DEPLOY_SATE").Key("MODE").MustInt(TEST),
 	}

@@ -2,9 +2,13 @@ package rest
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net"
 	"net/http"
+	"path/filepath"
 	"pjt/internal/config"
+	"pjt/internal/endpoints"
 
 	"pjt/internal/transport/middleware"
 	"time"
@@ -36,6 +40,11 @@ func New(cfg *config.Configuration) *RestServer {
 	// ex) curl 'host/log-config?level=debug'
 	router.GET("/log-config", handleLogConfig)
 
+	// 프론트의 엔드포인트 설정 조회/저장
+	store := endpoints.NewStore(cfg.EndpointsFile, filepath.Join(cfg.SpaDir, "config", "endpoints.json"))
+	api.GET("/config", handleGetEndpoints(store))
+	api.PUT("/config", handlePutEndpoints(store))
+
 	router.NoRoute(middleware.SpaHandler("/api", cfg.SpaDir, cfg.SpaIndex))
 
 	return &RestServer{
@@ -65,6 +74,46 @@ func handleLogConfig(c *gin.Context) {
 		logger.Warnf("[REST] log level changed: %s, remote: %s", level, c.ClientIP())
 	}
 	c.JSON(http.StatusOK, gin.H{"level": logger.GetLevel().String()})
+}
+
+// 설정 저장 요청 본문 최대 크기
+const maxEndpointsBodyBytes = 1 << 20
+
+func handleGetEndpoints(store *endpoints.Store) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		data, err := store.Load()
+		if err != nil {
+			logger.Errorf("[REST] failed to load endpoints config, err: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "설정 파일을 읽지 못했습니다"})
+			return
+		}
+		c.Header("Cache-Control", "no-cache")
+		c.Data(http.StatusOK, "application/json; charset=utf-8", data)
+	}
+}
+
+func handlePutEndpoints(store *endpoints.Store) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, maxEndpointsBodyBytes))
+		if err != nil {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "요청 본문이 너무 큽니다"})
+			return
+		}
+
+		data, err := store.Save(body)
+		switch {
+		case errors.Is(err, endpoints.ErrInvalid):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		case err != nil:
+			logger.Errorf("[REST] failed to save endpoints config, err: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "설정 파일을 저장하지 못했습니다"})
+			return
+		}
+
+		logger.Warnf("[REST] endpoints config saved, remote: %s", c.ClientIP())
+		c.Data(http.StatusOK, "application/json; charset=utf-8", data)
+	}
 }
 
 // Listen 은 포트를 바인딩한다. 포트 사용 중 같은 바인딩 실패를 Serve 전에 동기적으로 알 수 있다.

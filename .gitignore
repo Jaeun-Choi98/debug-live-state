@@ -36,3 +36,6 @@ pnpm-debug.log*
 # OS
 .DS_Store
 Thumbs.db
+
+# go-server 에서 화면으로 수정한 엔드포인트 설정 ( 런타임 데이터 )
+go-server/cmd/server/data/

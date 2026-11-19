@@ -163,3 +163,28 @@
 @keyframes endpoint-spin {
   to { transform: rotate(360deg); }
 }
+
+/* 사이드바에서 이동했을 때 sticky 헤더(52px)에 가려지지 않게 한다. */
+.endpoint-card {
+  scroll-margin-top: 68px;
+}
+
+.endpoint-card:focus {
+  outline: none;
+}
+
+/* 사이드바에서 선택된 카드를 잠깐 강조한다. (Dashboard 에서 클래스를 붙였다 뗀다) */
+.endpoint-card-focused {
+  animation: endpoint-card-flash 1.6s ease-out;
+}
+
+@keyframes endpoint-card-flash {
+  0%, 30% {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.35);
+  }
+  100% {
+    border-color: var(--border);
+    box-shadow: 0 0 0 3px rgba(88, 166, 255, 0);
+  }
+}
