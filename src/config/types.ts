@@ -8,7 +8,7 @@
  *   "groups":    [{ "slug": "uw", "name": "의왕" }],
  *   "servers":   [{ "id": "uw-app1", "group": "uw", "label": "의왕 APP 1", "host": "10.0.0.11", "port": 22, "user": "ops", "hasPassword": true }],
  *   "processes": [{ "id": "shelter", "server": "uw-app1", "label": "Shelter", "match": "java .*shelter\\.jar",
- *                   "logDir": "/opt/shelter/logs", "startScript": "/opt/shelter/start.sh",
+ *                   "logFiles": ["/opt/shelter/logs/*.log"], "iniFiles": ["/opt/shelter/conf/*.ini"], "startScript": "/opt/shelter/start.sh",
  *                   "autoRestart": true, "watchName": "java", "watchArgs": "/opt/shelter/shelter.jar" }]
  * }
  */
@@ -61,10 +61,10 @@ export interface ProcessEntry {
   label?: string;
   /** ps 명령줄에 대한 정규식. 맞는 프로세스가 있으면 실행 중으로 본다. */
   match: string;
-  /** 로그 폴더의 절대 경로. 로그 보기에서 이 폴더 아래를 둘러보고 파일을 tail 로 본다. */
-  logDir?: string;
-  /** 설정(INI) 폴더의 절대 경로. INI 버튼으로 이 폴더 아래의 *.ini 파일을 읽고 고친다. */
-  configDir?: string;
+  /** 로그 파일 패턴 (예: /opt/app/logs/*.log). 로그 버튼에는 이 패턴에 맞는 파일만 보이고, tail 로 본다. */
+  logFiles?: string[];
+  /** INI 파일 패턴 (예: /opt/app/conf/*.ini). INI 버튼에는 이 패턴에 맞는 파일만 보이고, 읽고 고친다. */
+  iniFiles?: string[];
   /** 시작 · 재시작 때 실행할 스크립트의 절대 경로 */
   startScript?: string;
   /**
@@ -107,17 +107,18 @@ export interface IniFile {
 
 /** GET /api/processes/:id/files 응답 */
 export interface FileList {
-  /** 로그 폴더 기준 상대 경로 ('' 이면 로그 폴더) */
-  path: string;
-  /** 폴더가 먼저, 그 안에서는 최근 수정 순 */
+  /** 등록한 패턴 */
+  patterns: string[];
+  /** 패턴에 맞는 파일, 최근 수정 순 */
   entries: FileEntry[];
   /** 항목이 너무 많아 오래된 것을 잘랐는지 */
   truncated?: boolean;
 }
 
 export interface FileEntry {
-  name: string;
-  type: 'dir' | 'file' | 'link' | 'other';
+  /** 절대 경로 */
+  path: string;
+  type: 'file' | 'link';
   size: number;
   /** ls 가 보여주는 수정 시각 ("Nov 19 11:15") */
   modified: string;

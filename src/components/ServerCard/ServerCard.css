@@ -147,8 +147,20 @@
 
 .server-card-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 4px;
+}
+
+.server-card-table-wrap {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+/* PID 가 여러 개일 때 "+3" */
+.server-card-more {
+  color: var(--text-muted);
+  cursor: help;
 }
 
 .server-card-busy {

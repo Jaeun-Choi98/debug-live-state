@@ -1,7 +1,7 @@
 # Process Management
 
 여러 서버에 SSH 로 접속해 등록한 프로세스의 실행 상태(PID · CPU · MEM · 실행 시간)를 확인하고,
-로그 폴더를 둘러보며 로그 파일을 보고, INI 설정 파일을 읽고 고치고, 시작 · 중지 · 재시작하는 관리 화면입니다. 꺼진 프로세스를 자동으로 다시 시작할 수도 있습니다. 서버는 사용자가 만든 그룹(의왕, 광명 ...)으로
+등록한 로그 파일을 보고, INI 설정 파일을 읽고 고치고, 시작 · 중지 · 재시작하는 관리 화면입니다. 꺼진 프로세스를 자동으로 다시 시작할 수도 있습니다. 서버는 사용자가 만든 그룹(의왕, 광명 ...)으로
 묶어서 보여주고, 그룹마다 주소가 나뉩니다. (`/all` 전체, `/uw` 의왕만)
 
 ```
@@ -11,12 +11,14 @@
 
 ## 설계 원칙
 
-- **정해진 명령만 실행**: 설정에는 명령을 적지 않고, 프로세스를 찾을 정규식(`match`)과 로그 폴더 ·
+- **정해진 명령만 실행**: 설정에는 명령을 적지 않고, 프로세스를 찾을 정규식(`match`)과 로그 · INI 파일 패턴 ·
   시작 스크립트 경로만 적습니다. Go 서버가 `ps`, `ls`, `tail`, `kill -TERM <PID>`, `nohup <스크립트>` 만 만들어
   실행하며, 설정의 경로는 셸 특수문자가 없는 절대 경로만 허용합니다.
-- **로그는 폴더 단위**: 로그 폴더(`logDir`) 아래의 파일 · 폴더 목록을 보여주고, 고른 파일을 `tail` 로 봅니다.
-  `..` 이 들어간 경로처럼 로그 폴더 밖을 가리키는 요청은 거부합니다. (폴더 안의 심볼릭 링크가 가리키는 곳은 막지 않습니다)
-- **INI 는 안전하게 덮어쓰기**: INI 폴더(`configDir`) 아래의 `*.ini` 만 열고 고칩니다. 저장할 때는 읽었던 내용의 hash 를
+- **파일은 패턴으로만**: 폴더를 둘러보는 기능은 없습니다. 프로세스마다 로그 파일 패턴(`logFiles`, 예: `/opt/app/logs/*.log`)과
+  INI 파일 패턴(`iniFiles`, 예: `/opt/app/conf/*.ini`)을 적고, 화면에는 패턴에 맞는 파일만 보입니다. 읽기 · 쓰기 요청이 오면
+  Go 서버가 경로가 패턴에 맞는지 다시 확인합니다. `* ?` 는 `/` 를 넘지 않고(`**` 금지), 앞의 두 폴더는 와일드카드 없이 적어야
+  해서 `/home/*`, `/*/app.log` 처럼 넓은 곳을 훑는 패턴은 저장되지 않습니다. (패턴에 맞는 심볼릭 링크가 가리키는 곳은 막지 않습니다)
+- **INI 는 안전하게 덮어쓰기**: INI 파일 패턴에 맞는 파일만 열고 고칩니다. 저장할 때는 읽었던 내용의 hash 를
   같이 보내 그 사이 다른 곳에서 바뀌었으면 거부하고, 받은 내용을 임시 파일에 다 쓴 뒤 크기를 확인하고 나서야 원본을 바꿉니다.
   이전 내용은 `<파일>.bak` 에 남기고, 원본은 내용만 바꿔 권한 · 소유자를 유지합니다. UTF-8 이 아닌 파일은 열지 않습니다.
 - **자동 재시작은 정확한 비교로**: 모니터링 화면의 `감시` 창에서 프로세스별로 켜고 끕니다. 화면 표시용 `match`(정규식)와 따로, 감시 프로세스를 실행 파일 이름(`watchName`,
@@ -57,8 +59,8 @@
       "server": "uw-app1",
       "label": "Shelter",
       "match": "java .*shelter\\.jar",
-      "logDir": "/opt/shelter/logs",
-      "configDir": "/opt/shelter/conf",
+      "logFiles": ["/opt/shelter/logs/*.log", "/opt/shelter/logs/*/*.log"],
+      "iniFiles": ["/opt/shelter/conf/*.ini"],
       "startScript": "/opt/shelter/start.sh",
       "autoRestart": true,
       "watchName": "java",
@@ -80,8 +82,8 @@
 | `servers[].label` | | 표시 이름 (생략 시 id) |
 | `processes[].id` / `server` | ✓ | 고유 id / 서버 id |
 | `processes[].match` | ✓ | `ps` 명령줄에 대한 정규식(Go RE2). 다른 프로세스와 겹치지 않게 구체적으로 (`worker\.sh` 는 `com.apple.mdworker.shared` 에도 맞습니다) |
-| `processes[].logDir` | | 로그 폴더의 절대 경로. 로그 보기에서 이 폴더 아래를 둘러봅니다 |
-| `processes[].configDir` | | INI 폴더의 절대 경로. `INI` 버튼으로 이 폴더 아래의 `*.ini` 를 읽고 고칩니다 |
+| `processes[].logFiles` | | 로그 파일 패턴 목록 (최대 10개). `로그` 버튼에 이 패턴에 맞는 파일만 보입니다. 설정 창에서는 쉼표로 나눠 적습니다 |
+| `processes[].iniFiles` | | INI 파일 패턴 목록 (최대 10개, `.ini` 로 끝나야 함). `INI` 버튼으로 이 패턴에 맞는 파일만 읽고 고칩니다 |
 | `processes[].startScript` | | 시작 · 재시작 때 인자 없이 실행할 스크립트의 절대 경로. 스크립트가 있는 폴더에서 `nohup` 으로 실행하고 출력은 버리므로, 로그는 스크립트가 직접 남겨야 합니다 |
 | `processes[].label` | | 표시 이름 (생략 시 id) |
 | `processes[].autoRestart` | | 이것과 `watchName` · `watchArgs` 는 ⚙ 설정이 아니라 모니터링 화면의 `감시` 창에서 바꿉니다. `true` 면 감시 프로세스가 없을 때 시작 스크립트를 자동 실행합니다. `startScript` 와, `watchName` · `watchArgs` 중 하나 이상 필요 |
@@ -93,7 +95,8 @@
   파일이 바뀌었으면 덮어쓰지 않고 거부합니다(409). 설정 창은 열 때마다 최신 설정을 다시 읽습니다.
 - 규칙은 프론트(`src/config/schema.ts`)와 Go 서버(`go-server/internal/processes/config.go`)가 같은 내용으로 검사합니다.
 - 중지는 match 로 찾은 PID 에 SIGTERM 을 보내고 10초 기다립니다. 그 안에 종료되지 않으면 실패로 알려주며 SIGKILL 은 보내지 않습니다.
-- 예전 설정의 `logFile`(파일 하나)은 읽을 때 그 파일이 있는 폴더(`logDir`)로 바뀌고, 다음 저장 때 `logDir` 로 저장됩니다.
+- 예전 설정은 읽을 때 패턴으로 바뀌고, 다음 저장 때 패턴으로 저장됩니다.
+  `logFile: /a/app.log` → `[/a/app.log]`, `logDir: /a/logs` → `[/a/logs/*, /a/logs/*/*]`, `configDir: /a/conf` → `[/a/conf/*.ini, /a/conf/*/*.ini]`
 
 ### 사이트 안내문 (config/README.md, config/API.md)
 
@@ -144,7 +147,7 @@ src/
     Header/                  그룹 탭 (/all, /uw ...)
     StatusSidebar/           그룹 · 서버 상태 사이드바 (클릭 시 카드로 이동)
     ServerCard/              서버 1대: 접속 상태 + 프로세스 표 + 자동 재시작 상태 + 로그 · INI · 감시 · 시작 · 중지 버튼
-    LogViewer/               로그 · INI 폴더 둘러보기 → 로그 보기 (줄 수, 필터, 자동 새로고침) 또는 INI 편집
+    LogViewer/               패턴에 맞는 로그 · INI 파일 목록 → 로그 보기 (줄 수, 필터, 자동 새로고침) 또는 INI 편집
     IniEditor/               INI 파일 편집 · 저장 (CRLF 유지, 동시 수정 감지)
     WatchEditor/             자동 재시작 · 감시 조건 변경, 지금 맞는 프로세스 확인
     ConfigEditor/            그룹 · 서버 · 프로세스 편집 / 가져오기 / 내보내기
@@ -158,7 +161,7 @@ go-server/internal/
     config.go                설정 타입 · 검사 · 저장 (비밀번호 유지 규칙)
     remote.go                SSH 연결 재사용 · 명령 실행 · known_hosts 확인
     monitor.go               ps 로 상태 확인, kill · 시작 스크립트로 제어
-    files.go                 로그 · INI 폴더 목록(ls), 로그 tail, INI 읽기 · 쓰기
+    files.go                 패턴에 맞는 로그 · INI 파일 목록(ls), 로그 tail, INI 읽기 · 쓰기, 경로 확인
     watchdog.go              자동 재시작 감시 (watchName · watchArgs), 감시 조건 확인
   transport/rest.go          /api 핸들러
 ```

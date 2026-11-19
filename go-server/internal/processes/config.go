@@ -59,10 +59,10 @@ type Process struct {
 	Label  string `json:"label,omitempty"`
 	// ps 의 명령줄(args)에 대한 정규식. 일치하는 프로세스를 이 항목의 실행 인스턴스로 본다.
 	Match string `json:"match"`
-	// 로그 폴더의 절대 경로. 화면에서 이 폴더 아래의 파일 · 폴더를 둘러보고 파일을 tail 로 본다.
-	LogDir string `json:"logDir,omitempty"`
-	// 설정(INI) 폴더의 절대 경로. 화면에서 이 폴더 아래의 *.ini 파일을 열어 읽고 고친다.
-	ConfigDir string `json:"configDir,omitempty"`
+	// 로그 파일 패턴 (예: /opt/app/logs/*.log). 화면에는 이 패턴에 맞는 파일만 보이고, tail 로 끝부분을 읽는다.
+	LogFiles []string `json:"logFiles,omitempty"`
+	// INI 파일 패턴 (예: /opt/app/conf/*.ini). 화면에는 이 패턴에 맞는 파일만 보이고, 통째로 읽고 고친다.
+	IniFiles []string `json:"iniFiles,omitempty"`
 	// 시작 · 재시작 때 실행할 스크립트의 절대 경로 (인자 없이 실행)
 	StartScript string `json:"startScript,omitempty"`
 
@@ -89,6 +89,8 @@ var (
 	slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 	hostPattern = regexp.MustCompile(`^[A-Za-z0-9.:-]+$`)
 	pathPattern = regexp.MustCompile(`^/[A-Za-z0-9._/-]+$`)
+	// 파일 패턴: 경로 문자에 셸 와일드카드 * ? 만 더 허용한다. (명령에 따옴표 없이 넣어 셸이 펼치게 하므로)
+	filePatternChars = regexp.MustCompile(`^/[A-Za-z0-9._/*?-]+$`)
 	// 실행 파일 이름 (경로 · 공백 없이)
 	watchNamePattern = regexp.MustCompile(`^[^/\s]+$`)
 	// 화면 · 서버의 다른 경로와 겹치는 slug
@@ -174,10 +176,18 @@ func (c *Config) Validate() error {
 		if _, err := regexp.Compile(p.Match); p.Match == "" || err != nil {
 			add("%s.match: 올바른 정규식이 필요합니다", at)
 		}
-		for field, value := range map[string]string{"logDir": p.LogDir, "configDir": p.ConfigDir, "startScript": p.StartScript} {
-			// path.Clean 과 다르면 '..', '//' 등이 들어 있는 경로다.
-			if value != "" && (!pathPattern.MatchString(value) || path.Clean(value) != value) {
-				add("%s.%s: 영문 · 숫자 · . _ - / 로 된 절대 경로가 필요합니다", at, field)
+		// path.Clean 과 다르면 '..', '//' 등이 들어 있는 경로다.
+		if p.StartScript != "" && (!pathPattern.MatchString(p.StartScript) || path.Clean(p.StartScript) != p.StartScript) {
+			add("%s.startScript: 영문 · 숫자 · . _ - / 로 된 절대 경로가 필요합니다", at)
+		}
+		for field, patterns := range map[string][]string{"logFiles": p.LogFiles, "iniFiles": p.IniFiles} {
+			if len(patterns) > maxFilePatterns {
+				add("%s.%s: 패턴은 %d개까지 적을 수 있습니다", at, field, maxFilePatterns)
+			}
+			for _, pattern := range patterns {
+				if problem := checkFilePattern(pattern, field == "iniFiles"); problem != "" {
+					add("%s.%s: %s: %s", at, field, pattern, problem)
+				}
 			}
 		}
 		if p.WatchName != "" && !watchNamePattern.MatchString(p.WatchName) {
@@ -232,20 +242,70 @@ func (s *Store) load() (*Config, error) {
 	return &c, nil
 }
 
-// migrateLogFile 은 예전 설정의 processes[].logFile(로그 파일 하나)을 그 파일이 있는 폴더(logDir)로 바꿔 읽는다.
-// 다음에 저장하면 logDir 로 저장된다.
+const maxFilePatterns = 10
+
+// checkFilePattern 은 로그 · INI 파일 패턴의 문제를 돌려준다. (문제가 없으면 "")
+//
+//	허용: /opt/app/logs/*.log, /opt/app/logs/*, /opt/app/logs/*/*.log, /opt/app/conf/app.ini
+//	거부: /home/*, /*/app.log (앞 두 폴더에 와일드카드), /opt/** , /opt/../etc/*.ini
+//
+// 앞의 두 폴더는 와일드카드 없이 고정해서 /, /home 같은 넓은 곳을 통째로 훑는 패턴을 막는다.
+// * ? 는 / 를 넘지 않으므로(** 금지) 패턴에 적은 깊이까지만 맞는다.
+func checkFilePattern(pattern string, ini bool) string {
+	if !filePatternChars.MatchString(pattern) || path.Clean(pattern) != pattern {
+		return "영문 · 숫자 · . _ - / 와 * ? 로 된 절대 경로가 필요합니다"
+	}
+	if strings.Contains(pattern, "**") {
+		return "** 는 쓸 수 없습니다"
+	}
+	segments := strings.Split(pattern[1:], "/")
+	if len(segments) < 2 || strings.ContainsAny(segments[0]+segments[1], "*?") {
+		return "앞의 두 폴더는 와일드카드 없이 적어야 합니다 (예: /opt/app/logs/*.log)"
+	}
+	if ini && !isINI(segments[len(segments)-1]) {
+		return ".ini 로 끝나야 합니다"
+	}
+	return ""
+}
+
+// matchesAny 는 file 이 패턴 중 하나에 맞는지다. (* ? 는 / 를 넘지 않는다. 셸 glob 과 같다)
+func matchesAny(patterns []string, file string) bool {
+	for _, pattern := range patterns {
+		if ok, _ := path.Match(pattern, file); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// migrateLogFile 은 예전 설정을 파일 패턴으로 바꿔 읽는다. 다음에 저장하면 패턴으로 저장된다.
+//
+//	logFile: /a/b/app.log  → logFiles: [/a/b/app.log]
+//	logDir:  /a/logs       → logFiles: [/a/logs/*, /a/logs/*/*]        (폴더 바로 아래와 한 단계 아래 폴더의 파일)
+//	configDir: /a/conf     → iniFiles: [/a/conf/*.ini, /a/conf/*/*.ini]
 func migrateLogFile(data []byte, c *Config) {
 	var legacy struct {
 		Processes []struct {
-			LogFile string `json:"logFile"`
+			LogFile   string `json:"logFile"`
+			LogDir    string `json:"logDir"`
+			ConfigDir string `json:"configDir"`
 		} `json:"processes"`
 	}
 	if json.Unmarshal(data, &legacy) != nil || len(legacy.Processes) != len(c.Processes) {
 		return
 	}
-	for i, p := range legacy.Processes {
-		if c.Processes[i].LogDir == "" && p.LogFile != "" {
-			c.Processes[i].LogDir = path.Dir(p.LogFile)
+	for i, old := range legacy.Processes {
+		p := &c.Processes[i]
+		if len(p.LogFiles) == 0 {
+			switch {
+			case old.LogDir != "":
+				p.LogFiles = []string{old.LogDir + "/*", old.LogDir + "/*/*"}
+			case old.LogFile != "":
+				p.LogFiles = []string{old.LogFile}
+			}
+		}
+		if len(p.IniFiles) == 0 && old.ConfigDir != "" {
+			p.IniFiles = []string{old.ConfigDir + "/*.ini", old.ConfigDir + "/*/*.ini"}
 		}
 	}
 }

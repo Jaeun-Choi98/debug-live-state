@@ -108,20 +108,7 @@
   margin-left: auto;
 }
 
-.log-viewer-crumbs {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  font-family: 'SFMono-Regular', Consolas, monospace;
-  color: var(--text-muted);
-  word-break: break-all;
-}
 
-.log-viewer-crumbs strong {
-  color: var(--text);
-}
 
 .log-viewer-files {
   flex: 1;
@@ -170,7 +157,6 @@
   word-break: break-all;
 }
 
-.log-viewer-file-other,
 .log-viewer-link {
   color: var(--text-muted);
 }
@@ -204,4 +190,22 @@
   padding: 1px 6px;
   border: 1px solid var(--border);
   border-radius: 4px;
+}
+
+/* 등록한 패턴 · 연 파일 경로 */
+.log-viewer-patterns {
+  min-width: 0;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.log-viewer-patterns strong {
+  color: var(--text);
+}
+
+/* 목록에서 파일이 있는 폴더 부분은 흐리게, 파일 이름은 그대로 */
+.log-viewer-file-dir {
+  color: var(--text-muted);
 }

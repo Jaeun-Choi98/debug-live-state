@@ -57,19 +57,36 @@ const SECTIONS: { section: Section; title: string; description: string; columns:
     section: 'processes',
     title: '프로세스',
     description:
-      'match 는 화면에 보여줄 프로세스를 찾는 ps 명령줄 정규식입니다. 로그 폴더 · INI 폴더 · 시작 스크립트는 셸 특수문자가 없는 절대 경로로 적습니다. ' +
+      'match 는 화면에 보여줄 프로세스를 찾는 ps 명령줄 정규식입니다. 시작 스크립트는 셸 특수문자가 없는 절대 경로로 적습니다. ' +
+      '로그 · INI 파일은 이 패턴에 맞는 파일만 화면에서 열 수 있습니다. 여러 개는 쉼표로 나누고, * ? 는 폴더(/)를 넘지 않으며, 앞의 두 폴더는 와일드카드 없이 적습니다. ' +
       '자동 재시작과 감시 문자열은 모니터링 화면의 각 프로세스 [감시] 에서 바꿉니다.',
     columns: [
       { field: 'id', title: 'id *' },
       { field: 'server', title: '서버 *', type: 'select' },
       { field: 'label', title: '표시 이름' },
       { field: 'match', title: 'match (정규식) *', placeholder: 'java .*app\\.jar', className: 'config-editor-col-wide' },
-      { field: 'logDir', title: '로그 폴더', placeholder: '/opt/app/logs', className: 'config-editor-col-wide' },
-      { field: 'configDir', title: 'INI 폴더', placeholder: '/opt/app/conf', className: 'config-editor-col-wide' },
+      { field: 'logFiles', title: '로그 파일 패턴', placeholder: '/opt/app/logs/*.log, /opt/app/logs/*/*.log', className: 'config-editor-col-wide' },
+      { field: 'iniFiles', title: 'INI 파일 패턴', placeholder: '/opt/app/conf/*.ini', className: 'config-editor-col-wide' },
       { field: 'startScript', title: '시작 스크립트', placeholder: '/opt/app/start.sh', className: 'config-editor-col-wide' },
     ],
   },
 ];
+
+/** 쉼표로 나눈 패턴 칸 → 배열 (비면 생략) */
+const patternList = (value: string) => {
+  const patterns = value.split(',').map(p => p.trim()).filter(Boolean);
+  return patterns.length > 0 ? patterns : undefined;
+};
+
+// 예전 설정 파일을 가져올 때 폴더 · 파일 하나를 패턴으로 바꾼다. (Go 서버의 migrateLogFile 과 같은 규칙)
+//   logDir /a/logs → /a/logs/*, /a/logs/*/*   configDir /a/conf → /a/conf/*.ini, /a/conf/*/*.ini   logFile → 그대로
+const legacyPatterns = (process: object) => {
+  const { logDir, configDir, logFile } = process as { logDir?: string; configDir?: string; logFile?: string };
+  return {
+    logFiles: logDir ? [`${logDir}/*`, `${logDir}/*/*`] : logFile ? [logFile] : [],
+    iniFiles: configDir ? [`${configDir}/*.ini`, `${configDir}/*/*.ini`] : [],
+  };
+};
 
 const SECTION_TITLE: Record<Section, string> = { groups: '그룹', servers: '서버', processes: '프로세스' };
 
@@ -93,9 +110,8 @@ const toRows = (config: ProcessConfig): Record<Section, Row[]> => ({
     server: p.server,
     label: p.label ?? '',
     match: p.match,
-    // 예전 설정(logFile: 로그 파일 하나)을 가져오면 그 파일이 있는 폴더를 쓴다.
-    logDir: p.logDir ?? (p as { logFile?: string }).logFile?.replace(/\/[^/]*$/, '') ?? '',
-    configDir: p.configDir ?? '',
+    logFiles: (p.logFiles ?? legacyPatterns(p).logFiles).join(', '),
+    iniFiles: (p.iniFiles ?? legacyPatterns(p).iniFiles).join(', '),
     startScript: p.startScript ?? '',
     autoRestart: p.autoRestart ? 'true' : '',
     watchName: p.watchName ?? '',
@@ -177,8 +193,8 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) 
         server: r.server,
         label: text(r.label),
         match: r.match.trim(),
-        logDir: text(r.logDir),
-        configDir: text(r.configDir),
+        logFiles: patternList(r.logFiles),
+        iniFiles: patternList(r.iniFiles),
         startScript: text(r.startScript),
         autoRestart: r.autoRestart === 'true' || undefined,
         watchName: text(r.watchName),
@@ -236,8 +252,8 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) 
           server: prev.servers[0]?.id ?? '',
           label: '',
           match: '',
-          logDir: '',
-          configDir: '',
+          logFiles: '',
+          iniFiles: '',
           startScript: '',
           autoRestart: '',
           watchName: '',

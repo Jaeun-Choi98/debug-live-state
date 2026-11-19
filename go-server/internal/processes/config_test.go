@@ -21,9 +21,9 @@ func TestValidateCollectsAllErrors(t *testing.T) {
 			{ID: "s1", Group: "nope", Host: "bad host", Port: 70000, User: "", Password: ""},
 		},
 		Processes: []Process{
-			{ID: "p1", Server: "s1", Match: "java", LogDir: "/var/log/app", StartScript: "/opt/app/start.sh",
+			{ID: "p1", Server: "s1", Match: "java", LogFiles: []string{"/var/log/app/*.log"}, IniFiles: []string{"/opt/app/conf/*.ini"}, StartScript: "/opt/app/start.sh",
 				AutoRestart: true, WatchName: "java", WatchArgs: "-jar /opt/app/app.jar"},
-			{ID: "p1", Server: "s9", Match: "(", LogDir: "/var/log/../shadow", StartScript: "start.sh; rm -rf /", WatchName: "/usr/bin/java"},
+			{ID: "p1", Server: "s9", Match: "(", LogFiles: []string{"/home/*"}, IniFiles: []string{"/opt/app/conf/*"}, StartScript: "start.sh; rm -rf /", WatchName: "/usr/bin/java"},
 			{ID: "p3", Server: "s1", Match: "java", AutoRestart: true},
 			{ID: "p4", Server: "s1", Match: "java", AutoRestart: true, WatchArgs: "/opt/app/app.jar", StartScript: "/opt/app/start.sh"},
 		},
@@ -35,7 +35,7 @@ func TestValidateCollectsAllErrors(t *testing.T) {
 	for _, want := range []string{
 		"pollIntervalMs", "watchIntervalMs", "restartDelayMs", "groups[1].slug", "groups[2].slug", "groups[2].name",
 		"servers[1].id", "servers[1].group", "servers[1].host", "servers[1].port", "servers[1].user", "servers[1].password",
-		"processes[1].id", "processes[1].server", "processes[1].match", "processes[1].logDir", "processes[1].startScript",
+		"processes[1].id", "processes[1].server", "processes[1].match", "processes[1].logFiles", "processes[1].iniFiles", "processes[1].startScript",
 		"processes[1].watchName", "processes[2].watchArgs", "processes[2].startScript",
 	} {
 		if !strings.Contains(err.Error(), want+":") {
@@ -109,31 +109,49 @@ func TestParsePS(t *testing.T) {
 	}
 }
 
-func TestLoadMigratesLogFileToLogDir(t *testing.T) {
+func TestLoadMigratesToFilePatterns(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "processes.json")
 	os.WriteFile(file, []byte(`{"groups":[],"servers":[],"processes":[
 		{"id":"a","server":"s","match":"x","logFile":"/var/log/app/app.log"},
-		{"id":"b","server":"s","match":"x","logDir":"/data/logs"}]}`), 0o600)
+		{"id":"b","server":"s","match":"x","logDir":"/data/logs","configDir":"/data/conf"},
+		{"id":"c","server":"s","match":"x","logFiles":["/opt/c/logs/*.log"]}]}`), 0o600)
 	c, err := NewStore(file).Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Processes[0].LogDir != "/var/log/app" || c.Processes[1].LogDir != "/data/logs" {
-		t.Errorf("logDir = %q, %q", c.Processes[0].LogDir, c.Processes[1].LogDir)
+	got := fmt.Sprint(c.Processes[0].LogFiles, c.Processes[1].LogFiles, c.Processes[1].IniFiles, c.Processes[2].LogFiles)
+	want := "[/var/log/app/app.log] [/data/logs/* /data/logs/*/*] [/data/conf/*.ini /data/conf/*/*.ini] [/opt/c/logs/*.log]"
+	if got != want {
+		t.Errorf("migrated = %s\nwant       %s", got, want)
+	}
+}
+
+func TestCheckFilePattern(t *testing.T) {
+	for _, ok := range []string{"/opt/app/logs/*.log", "/opt/app/logs/*", "/opt/app/logs/*/*.log", "/opt/app.log", "/home/user/app-?.log"} {
+		if problem := checkFilePattern(ok, false); problem != "" {
+			t.Errorf("%s: %s", ok, problem)
+		}
+	}
+	for _, bad := range []string{"/home/*", "/*/app.log", "/opt/*/x.log", "/opt/app/**", "/opt/../etc/x.log", "opt/app/x.log", "/opt/app/x y.log", "/opt/app/$(id).log", "/opt/app/[ab].log", "/opt"} {
+		if checkFilePattern(bad, false) == "" {
+			t.Errorf("%s should be rejected", bad)
+		}
+	}
+	if checkFilePattern("/opt/app/conf/*.ini", true) != "" || checkFilePattern("/opt/app/conf/*", true) == "" {
+		t.Error("ini patterns must end with .ini")
 	}
 }
 
 func TestParseLS(t *testing.T) {
-	output := "total 16\n" +
-		"drwxr-xr-x@ 3 501  20     96 Nov 19 11:15 2026-11-19\n" +
-		"-rw-r--r--  1 1000 1000 1234 Nov 19 11:15 app 1.log\n" +
-		"lrwxr-xr-x  1 0    0       7 Nov 19  2025 current -> app.log\n" +
-		"crw-rw-rw-  1 0    0    1, 3 Nov 19 11:15 null\n"
+	output := "-rw-r--r--  1 1000 1000 1234 Nov 19 11:15 /opt/app/logs/app 1.log\n" +
+		"drwxr-xr-x@ 3 501  20     96 Nov 19 11:15 /opt/app/logs/2026-11-19\n" +
+		"lrwxr-xr-x  1 0    0       7 Nov 19  2025 /opt/app/logs/current -> app.log\n" +
+		"crw-rw-rw-  1 0    0    1, 3 Nov 19 11:15 /dev/null\n"
 	entries := parseLS(output)
 	want := []FileEntry{
-		{Name: "2026-11-19", Type: "dir", Size: 96, Modified: "Nov 19 11:15"},
-		{Name: "app 1.log", Type: "file", Size: 1234, Modified: "Nov 19 11:15"},
-		{Name: "current", Type: "link", Size: 7, Modified: "Nov 19  2025", Target: "app.log"},
+		{Path: "/opt/app/logs/app 1.log", Type: "file", Size: 1234, Modified: "Nov 19 11:15"},
+		{Path: "/opt/app/logs/2026-11-19", Type: "dir", Size: 96, Modified: "Nov 19 11:15"},
+		{Path: "/opt/app/logs/current", Type: "link", Size: 7, Modified: "Nov 19  2025", Target: "app.log"},
 	}
 	if len(entries) != len(want) {
 		t.Fatalf("entries = %+v", entries)
@@ -145,26 +163,28 @@ func TestParseLS(t *testing.T) {
 	}
 }
 
-func TestRootPathStaysInDir(t *testing.T) {
-	p := Process{LogDir: "/var/log/app", ConfigDir: "/opt/app/conf"}
-	if got, err := rootPath(p, RootLog, "2026/app.log"); err != nil || got != "/var/log/app/2026/app.log" {
-		t.Errorf("rootPath = %q, %v", got, err)
+func TestResolveFileOnlyMatchesPatterns(t *testing.T) {
+	p := Process{LogFiles: []string{"/var/log/app/*.log", "/var/log/app/*/*.log"}, IniFiles: []string{"/opt/app/conf/*.ini"}}
+	for _, ok := range []string{"/var/log/app/a.log", "/var/log/app/2026/a.log"} {
+		if err := resolveFile(p, RootLog, ok); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
 	}
-	if got, err := rootPath(p, RootINI, "db.ini"); err != nil || got != "/opt/app/conf/db.ini" {
-		t.Errorf("rootPath = %q, %v", got, err)
-	}
-	for _, bad := range []string{"../etc/passwd", "a/../../b", "/etc/passwd", "a//b", "it's.log", "a\nb"} {
-		if _, err := rootPath(p, RootLog, bad); err == nil {
+	for _, bad := range []string{"/var/log/app/a.txt", "/var/log/app/x/y/a.log", "/var/log/app/../secret.log", "/etc/passwd", "a.log", "/var/log/app/it's.log", "/var/log/app/a\nb.log", ""} {
+		if err := resolveFile(p, RootLog, bad); err == nil {
 			t.Errorf("%q should be rejected", bad)
 		}
 	}
-	if _, err := rootPath(Process{}, RootLog, "a.log"); err == nil {
-		t.Error("empty logDir should be rejected")
+	if err := resolveFile(p, RootINI, "/opt/app/conf/db.ini"); err != nil {
+		t.Errorf("ini: %v", err)
 	}
-	if _, err := rootPath(Process{LogDir: "/var/log"}, RootINI, ""); err == nil {
-		t.Error("empty configDir should be rejected")
+	if err := resolveFile(p, RootINI, "/var/log/app/a.log"); err == nil {
+		t.Error("log file must not open as ini")
 	}
-	if _, err := rootPath(p, "etc", ""); err == nil {
+	if err := resolveFile(Process{}, RootLog, "/var/log/app/a.log"); err == nil {
+		t.Error("no patterns should be rejected")
+	}
+	if err := resolveFile(p, "etc", "/etc/passwd"); err == nil {
 		t.Error("unknown root should be rejected")
 	}
 }

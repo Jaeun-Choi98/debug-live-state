@@ -7,6 +7,25 @@ export const DEFAULT_RESTART_DELAY_MS = 30000;
 /** 화면 · 서버의 다른 경로와 겹쳐서 그룹 slug 로 쓸 수 없는 값 */
 export const RESERVED_SLUGS = ['all', 'api', 'config', 'static', 'log-config'];
 
+const MAX_FILE_PATTERNS = 10;
+
+// 로그 · INI 파일 패턴의 문제를 돌려준다. (문제가 없으면 '') Go 서버의 checkFilePattern 과 같은 규칙이다.
+//
+//   허용: /opt/app/logs/*.log, /opt/app/logs/*, /opt/app/logs/*/*.log, /opt/app/conf/app.ini
+//   거부: /home/*, /*/app.log (앞 두 폴더에 와일드카드), /opt/app/**, /opt/../etc/*.ini
+export function checkFilePattern(pattern: unknown, ini: boolean): string {
+  if (typeof pattern !== 'string' || !/^\/[A-Za-z0-9._/*?-]+$/.test(pattern) || /(^|\/)\.\.?(\/|$)|\/\/|.\/$/.test(pattern)) {
+    return '영문 · 숫자 · . _ - / 와 * ? 로 된 절대 경로가 필요합니다';
+  }
+  if (pattern.includes('**')) return '** 는 쓸 수 없습니다';
+  const segments = pattern.slice(1).split('/');
+  if (segments.length < 2 || /[*?]/.test(segments[0] + segments[1])) {
+    return '앞의 두 폴더는 와일드카드 없이 적어야 합니다 (예: /opt/app/logs/*.log)';
+  }
+  if (ini && !segments[segments.length - 1].toLowerCase().endsWith('.ini')) return '.ini 로 끝나야 합니다';
+  return '';
+}
+
 export type ValidationResult = { ok: true; config: ProcessConfig } | { ok: false; errors: string[] };
 
 /**
@@ -93,9 +112,20 @@ export function validateProcessConfig(raw: unknown): ValidationResult {
     }
     if (!validPattern) errors.push(`${at}.match: 올바른 정규식이 필요합니다`);
 
-    for (const field of ['logDir', 'configDir', 'startScript'] as const) {
-      if (process[field] !== undefined && !isSafePath(process[field])) {
-        errors.push(`${at}.${field}: 영문 · 숫자 · . _ - / 로 된 절대 경로가 필요합니다`);
+    if (process.startScript !== undefined && !isSafePath(process.startScript)) {
+      errors.push(`${at}.startScript: 영문 · 숫자 · . _ - / 로 된 절대 경로가 필요합니다`);
+    }
+    for (const field of ['logFiles', 'iniFiles'] as const) {
+      const patterns = process[field];
+      if (patterns === undefined) continue;
+      if (!Array.isArray(patterns)) {
+        errors.push(`${at}.${field}: 배열이어야 합니다`);
+        continue;
+      }
+      if (patterns.length > MAX_FILE_PATTERNS) errors.push(`${at}.${field}: 패턴은 ${MAX_FILE_PATTERNS}개까지 적을 수 있습니다`);
+      for (const pattern of patterns) {
+        const problem = checkFilePattern(pattern, field === 'iniFiles');
+        if (problem) errors.push(`${at}.${field}: ${pattern}: ${problem}`);
       }
     }
 

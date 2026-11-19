@@ -169,10 +169,10 @@ func handleStatus(monitor *processes.Monitor) gin.HandlerFunc {
 	}
 }
 
-// GET /api/processes/:id/files?root=log|ini&path=2026-11 : 로그 · 설정 폴더 아래 폴더의 목록 ( path 를 비우면 등록한 폴더 )
+// GET /api/processes/:id/files?root=log|ini : 로그 · INI 파일 패턴에 맞는 파일 목록 ( 최근 수정 순 )
 func handleFiles(monitor *processes.Monitor) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		list, err := monitor.Files(c.Request.Context(), c.Param("id"), c.DefaultQuery("root", processes.RootLog), c.Query("path"))
+		list, err := monitor.Files(c.Request.Context(), c.Param("id"), c.DefaultQuery("root", processes.RootLog))
 		if err != nil {
 			respondError(c, err)
 			return
@@ -182,7 +182,7 @@ func handleFiles(monitor *processes.Monitor) gin.HandlerFunc {
 	}
 }
 
-// GET /api/processes/:id/log?path=app.log&lines=200 : 로그 폴더 아래 파일의 끝부분
+// GET /api/processes/:id/log?path=/opt/app/logs/app.log&lines=200 : 로그 파일 패턴에 맞는 파일의 끝부분
 func handleLog(monitor *processes.Monitor) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		lines, _ := strconv.Atoi(c.DefaultQuery("lines", "200"))
@@ -196,7 +196,7 @@ func handleLog(monitor *processes.Monitor) gin.HandlerFunc {
 	}
 }
 
-// GET /api/processes/:id/ini?path=app.ini : 설정 폴더 아래 *.ini 파일 내용과 hash
+// GET /api/processes/:id/ini?path=/opt/app/conf/app.ini : INI 파일 패턴에 맞는 파일 내용과 hash
 func handleReadINI(monitor *processes.Monitor) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		file, err := monitor.ReadINI(c.Request.Context(), c.Param("id"), c.Query("path"))
@@ -209,7 +209,7 @@ func handleReadINI(monitor *processes.Monitor) gin.HandlerFunc {
 	}
 }
 
-// PUT /api/processes/:id/ini?path=app.ini {"content": "...", "baseHash": "..."} : *.ini 파일 저장 ( 누가 했는지 로그에 남긴다 )
+// PUT /api/processes/:id/ini?path=/opt/app/conf/app.ini {"content": "...", "baseHash": "..."} : *.ini 파일 저장 ( 누가 했는지 로그에 남긴다 )
 func handleWriteINI(monitor *processes.Monitor) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var body struct {

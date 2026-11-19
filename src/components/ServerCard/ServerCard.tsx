@@ -13,7 +13,7 @@ interface ServerCardProps {
   status: ServerStatus | undefined;
   /** 상태 점 색 (사이드바와 같은 값) */
   state: ServerState;
-  /** 로그 · INI 폴더 창을 연다. */
+  /** 로그 · INI 파일 목록 창을 연다. */
   onOpenFiles: (process: ProcessEntry, root: FileRoot) => void;
   /** 자동 재시작 · 감시 조건 창을 연다. */
   onEditWatch: (process: ProcessEntry, watch: WatchStatus | undefined) => void;
@@ -92,100 +92,105 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, stat
       {processes.length === 0 ? (
         <div className="server-card-placeholder">등록된 프로세스가 없습니다.</div>
       ) : (
-        <table className="server-card-table">
-          <thead>
-            <tr>
-              <th>프로세스</th>
-              <th>PID</th>
-              <th className="server-card-num">CPU</th>
-              <th className="server-card-num">MEM</th>
-              <th>실행 시간</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {processes.map(process => {
-              const processStatus = status?.processes.find(s => s.id === process.id);
-              const instances = processStatus?.instances ?? [];
-              const running = instances.length > 0;
-              // 접속 실패 · 첫 확인 전에는 실행 여부를 알 수 없다.
-              const known = status !== undefined && !status.error;
-              const state = !known ? 'idle' : running ? 'ok' : 'error';
-              const action = busy[process.id];
-              const badge = known ? autoRestartBadge(process, processStatus?.watch) : null;
+        // 내용이 아무리 길어도 카드 밖으로 나가지 않게, 넘치면 표만 가로로 스크롤한다.
+        <div className="server-card-table-wrap">
+          <table className="server-card-table">
+            <thead>
+              <tr>
+                <th>프로세스</th>
+                <th>PID</th>
+                <th className="server-card-num">CPU</th>
+                <th className="server-card-num">MEM</th>
+                <th>실행 시간</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {processes.map(process => {
+                const processStatus = status?.processes.find(s => s.id === process.id);
+                const instances = processStatus?.instances ?? [];
+                const running = instances.length > 0;
+                // 접속 실패 · 첫 확인 전에는 실행 여부를 알 수 없다.
+                const known = status !== undefined && !status.error;
+                const state = !known ? 'idle' : running ? 'ok' : 'error';
+                const action = busy[process.id];
+                const badge = known ? autoRestartBadge(process, processStatus?.watch) : null;
 
-              return (
-                <tr key={process.id} className={`server-card-row-${state}`}>
-                  <td>
-                    <div className="server-card-process" title={`match: ${process.match}`}>
-                      <span className={`status-dot status-${action ? 'loading' : state}`} />
-                      <span className="server-card-process-name">{process.label || process.id}</span>
-                      {known && !running && <span className="server-card-badge">STOPPED</span>}
-                    </div>
-                    {badge && (
-                      <button
-                        className={`server-card-watch server-card-watch-${badge.kind}`}
-                        title={`${badge.title}\n(눌러서 바꾸기)`}
-                        onClick={() => onEditWatch(process, processStatus?.watch)}
-                      >
-                        ↻ {badge.text}
-                      </button>
-                    )}
-                  </td>
-                  <td className="server-card-mono" title={instances.map(i => `${i.pid}: ${i.command}`).join('\n')}>
-                    {running ? instances.map(i => i.pid).join(', ') : '-'}
-                  </td>
-                  <td className="server-card-num">{running ? `${instances.reduce((sum, i) => sum + i.cpu, 0).toFixed(1)}%` : '-'}</td>
-                  <td className="server-card-num">{running ? `${instances.reduce((sum, i) => sum + i.mem, 0).toFixed(1)}%` : '-'}</td>
-                  <td className="server-card-mono">{running ? instances[0].elapsed : '-'}</td>
-                  <td>
-                    <div className="server-card-actions">
-                      {action ? (
-                        <span className="server-card-busy">{ACTION_TEXT[action]} 중...</span>
-                      ) : (
-                        <>
-                          <button className="btn-text" onClick={() => onOpenFiles(process, 'log')} disabled={!process.logDir} title={process.logDir || '로그 폴더가 등록되지 않았습니다'}>
-                            로그
-                          </button>
-                          <button
-                            className="btn-text"
-                            onClick={() => onOpenFiles(process, 'ini')}
-                            disabled={!process.configDir}
-                            title={process.configDir || '설정(INI) 폴더가 등록되지 않았습니다'}
-                          >
-                            INI
-                          </button>
-                          <button
-                            className="btn-text"
-                            onClick={() => onEditWatch(process, processStatus?.watch)}
-                            title="자동 재시작 · 감시 조건"
-                          >
-                            감시
-                          </button>
-                          {known && !running && (
-                            <button className="btn-text btn-text-ok" onClick={() => runAction(process, 'start')} disabled={!process.startScript} title={process.startScript || '시작 스크립트가 등록되지 않았습니다'}>
-                              시작
-                            </button>
-                          )}
-                          {known && running && (
-                            <>
-                              <button className="btn-text" onClick={() => runAction(process, 'restart')} disabled={!process.startScript} title={process.startScript || '시작 스크립트가 등록되지 않았습니다'}>
-                                재시작
-                              </button>
-                              <button className="btn-text btn-text-danger" onClick={() => runAction(process, 'stop')} title={`PID ${instances.map(i => i.pid).join(' ')} 에 SIGTERM`}>
-                                중지
-                              </button>
-                            </>
-                          )}
-                        </>
+                return (
+                  <tr key={process.id} className={`server-card-row-${state}`}>
+                    <td>
+                      <div className="server-card-process" title={`match: ${process.match}`}>
+                        <span className={`status-dot status-${action ? 'loading' : state}`} />
+                        <span className="server-card-process-name">{process.label || process.id}</span>
+                        {known && !running && <span className="server-card-badge">STOPPED</span>}
+                      </div>
+                      {badge && (
+                        <button
+                          className={`server-card-watch server-card-watch-${badge.kind}`}
+                          title={`${badge.title}\n(눌러서 바꾸기)`}
+                          onClick={() => onEditWatch(process, processStatus?.watch)}
+                        >
+                          ↻ {badge.text}
+                        </button>
                       )}
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+                    </td>
+                    {/* PID 가 여러 개면 첫 번째만 보이고 나머지는 개수로 줄인다. (전체는 마우스를 올리면 보인다) */}
+                    <td className="server-card-mono" title={instances.map(i => `${i.pid}: ${i.command}`).join('\n')}>
+                      {running ? instances[0].pid : '-'}
+                      {instances.length > 1 && <span className="server-card-more"> +{instances.length - 1}</span>}
+                    </td>
+                    <td className="server-card-num">{running ? `${instances.reduce((sum, i) => sum + i.cpu, 0).toFixed(1)}%` : '-'}</td>
+                    <td className="server-card-num">{running ? `${instances.reduce((sum, i) => sum + i.mem, 0).toFixed(1)}%` : '-'}</td>
+                    <td className="server-card-mono">{running ? instances[0].elapsed : '-'}</td>
+                    <td>
+                      <div className="server-card-actions">
+                        {action ? (
+                          <span className="server-card-busy">{ACTION_TEXT[action]} 중...</span>
+                        ) : (
+                          <>
+                            <button className="btn-text" onClick={() => onOpenFiles(process, 'log')} disabled={!process.logFiles?.length} title={process.logFiles?.join('\n') || '로그 파일 패턴이 등록되지 않았습니다'}>
+                              로그
+                            </button>
+                            <button
+                              className="btn-text"
+                              onClick={() => onOpenFiles(process, 'ini')}
+                              disabled={!process.iniFiles?.length}
+                              title={process.iniFiles?.join('\n') || 'INI 파일 패턴이 등록되지 않았습니다'}
+                            >
+                              INI
+                            </button>
+                            <button
+                              className="btn-text"
+                              onClick={() => onEditWatch(process, processStatus?.watch)}
+                              title="자동 재시작 · 감시 조건"
+                            >
+                              감시
+                            </button>
+                            {known && !running && (
+                              <button className="btn-text btn-text-ok" onClick={() => runAction(process, 'start')} disabled={!process.startScript} title={process.startScript || '시작 스크립트가 등록되지 않았습니다'}>
+                                시작
+                              </button>
+                            )}
+                            {known && running && (
+                              <>
+                                <button className="btn-text" onClick={() => runAction(process, 'restart')} disabled={!process.startScript} title={process.startScript || '시작 스크립트가 등록되지 않았습니다'}>
+                                  재시작
+                                </button>
+                                <button className="btn-text btn-text-danger" onClick={() => runAction(process, 'stop')} title={`PID ${instances.map(i => i.pid).join(' ')} 에 SIGTERM`}>
+                                  중지
+                                </button>
+                              </>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
   );

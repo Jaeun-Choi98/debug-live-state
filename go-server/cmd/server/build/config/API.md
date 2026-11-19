@@ -21,9 +21,9 @@
 | 용도 | 명령 |
 |---|---|
 | 상태 확인 | `LC_ALL=C ps -eo pid=,pcpu=,pmem=,etime=,args=` (서버마다 2초에 최대 1번, 여러 사람이 봐도 공유) |
-| 로그 · INI 폴더 목록 | `cd -- '<폴더>/<경로>'` 후 `LC_ALL=C ls -lAnt` (최대 1000개) |
-| 로그 | `tail -n <줄 수> -- '<로그 폴더>/<경로>'` |
-| INI 읽기 | `wc -c` 로 1MB 이하인지 본 뒤 `cat -- '<INI 폴더>/<경로>'` |
+| 로그 · INI 파일 목록 | `LC_ALL=C ls -lndt -- <패턴 ...>` (패턴은 셸이 펼침, 최대 1000개) |
+| 로그 | `tail -n <줄 수> -- '<파일>'` |
+| INI 읽기 | `wc -c` 로 1MB 이하인지 본 뒤 `cat -- '<파일>'` |
 | INI 쓰기 | 받은 내용을 `<파일>.pm-new` 에 쓰고 크기가 맞는지 확인 → `cp -p` 로 `<파일>.bak` 백업 → `cat <파일>.pm-new > <파일>` (권한 · 소유자 유지) → 임시 파일 삭제 |
 | 중지 | `kill -TERM <PID ...>` (PID 는 ps 결과에서 match 정규식으로 찾은 값) |
 | 시작 | 아래 명령 (스크립트가 있는 폴더에서 백그라운드로 실행, 출력은 버림) |
@@ -68,7 +68,7 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
   ],
   "processes": [
     { "id": "shelter", "server": "uw-app1", "label": "Shelter", "match": "java .*shelter\\.jar",
-      "logDir": "/opt/shelter/logs", "startScript": "/opt/shelter/start.sh",
+      "logFiles": ["/opt/shelter/logs/*.log"], "iniFiles": ["/opt/shelter/conf/*.ini"], "startScript": "/opt/shelter/start.sh",
       "autoRestart": true, "watchName": "java", "watchArgs": "/opt/shelter/shelter.jar" }
   ]
 }
@@ -94,8 +94,8 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 | processes[].server | O | 서버 id |
 | processes[].label | | 표시 이름 (없으면 id) |
 | processes[].match | O | ps 명령줄(args)에 대한 정규식 (Go RE2 문법) |
-| processes[].logDir | | 로그 폴더 절대 경로 (영문 · 숫자 · `. _ - /`) |
-| processes[].configDir | | INI 폴더 절대 경로 (영문 · 숫자 · `. _ - /`). 이 폴더 아래 *.ini 를 읽고 고칩니다 |
+| processes[].logFiles | | 로그 파일 패턴 목록 (최대 10개). 영문 · 숫자 · `. _ - /` 와 `* ?`. `* ?` 는 `/` 를 넘지 않고 `**` 는 금지, 앞의 두 폴더는 와일드카드 없이 |
+| processes[].iniFiles | | INI 파일 패턴 목록. 규칙은 logFiles 와 같고 `.ini` 로 끝나야 합니다 |
 | processes[].startScript | | 시작 스크립트 절대 경로 (영문 · 숫자 · `. _ - /`) |
 | processes[].autoRestart | | `true` 면 자동 재시작. `startScript` 와, `watchName` · `watchArgs` 중 하나 이상 필요 |
 | processes[].watchName | | 감시 프로세스의 실행 파일 이름 (경로 · 공백 없이, 정확히 일치) |
@@ -142,53 +142,54 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 - SSH 접속에 실패한 서버는 `error` 에 이유가 들어가고, 나머지 서버의 결과는 그대로 옵니다. (응답은 `200`)
 - 없는 그룹이면 `404`
 
-### GET /api/processes/:id/files?root=log&path=2026-11
+### GET /api/processes/:id/files?root=log
 
-`root` 폴더(`log` 로그 폴더, 기본값 · `ini` INI 폴더) 아래 `path` 폴더(상대 경로, 비우면 등록한 폴더)의 목록입니다. 폴더가 먼저, 그 안에서는 최근 수정 순입니다. `root=ini` 면 폴더와 `*.ini` 만 보여줍니다.
+`root`(`log` 로그 파일 패턴, 기본값 · `ini` INI 파일 패턴)에 등록한 패턴에 맞는 파일 목록입니다. 최근 수정 순이며, 폴더는 보여주지 않습니다.
 
 ```json
 {
-  "path": "2026-11",
+  "patterns": ["/opt/shelter/logs/*.log", "/opt/shelter/logs/*/*.log"],
   "entries": [
-    { "name": "archive", "type": "dir", "size": 4096, "modified": "Nov 19 11:15" },
-    { "name": "app.log", "type": "file", "size": 1234, "modified": "Nov 19 11:15" },
-    { "name": "current.log", "type": "link", "size": 7, "modified": "Nov 18  2025", "target": "app.log" }
+    { "path": "/opt/shelter/logs/app.log", "type": "file", "size": 1234, "modified": "Nov 19 11:15" },
+    { "path": "/opt/shelter/logs/current.log", "type": "link", "size": 7, "modified": "Nov 18  2025", "target": "app.log" },
+    { "path": "/opt/shelter/logs/2026-11/app.log", "type": "file", "size": 4096, "modified": "Nov 18  2025" }
   ],
   "truncated": false
 }
 ```
 
-- `type`: `dir` · `file` · `link`(심볼릭 링크) · `other`(장치 파일 등, 열 수 없음). `modified` 는 `ls` 가 보여주는 시각 그대로입니다.
+- `type`: `file` · `link`(심볼릭 링크). `modified` 는 `ls` 가 보여주는 시각 그대로입니다.
 - 1000개를 넘으면 최근 것만 주고 `truncated: true` 입니다.
+- 맞는 파일이 없는 패턴은 무시합니다. (권한이 없어 못 읽는 폴더도 오류 없이 빠집니다)
 
 | 상태 코드 | 의미 |
 |---|---|
-| `400` | 폴더가 등록되지 않음, 알 수 없는 `root`, 또는 `..` · 빈 구간 · 작은따옴표 · 제어 문자가 들어간 경로 |
+| `400` | 패턴이 등록되지 않음, 알 수 없는 `root` |
 | `404` | 없는 프로세스 |
-| `502` | SSH 실패, 폴더가 없거나 폴더가 아님, 권한 없음 |
+| `502` | SSH 실패 |
 
-### GET /api/processes/:id/log?path=2026-11/app.log&lines=200
+### GET /api/processes/:id/log?path=/opt/shelter/logs/app.log&lines=200
 
-로그 폴더 아래 `path` 파일의 마지막 `lines` 줄(1~2000, 기본 200)을 돌려줍니다. 응답 `200` `{"output": "...\n"}`
+로그 파일 패턴에 맞는 `path`(절대 경로) 파일의 마지막 `lines` 줄(1~2000, 기본 200)을 돌려줍니다. 응답 `200` `{"output": "...\n"}`
 
 | 상태 코드 | 의미 |
 |---|---|
-| `400` | 로그 폴더가 등록되지 않음, `path` 없음, 잘못된 경로 (위와 같음) |
+| `400` | 패턴이 등록되지 않음, `path` 없음, 패턴에 맞지 않거나 `..` · 작은따옴표 · 제어 문자가 들어간 경로 |
 | `404` | 없는 프로세스 |
 | `502` | SSH 실패 또는 tail 실패 (파일 없음 · 권한 없음 등, 서버의 오류 문구 포함) |
 
-### GET /api/processes/:id/ini?path=env/app.ini
+### GET /api/processes/:id/ini?path=/opt/shelter/conf/app.ini
 
-INI 폴더 아래 `path` 파일(`.ini` 로 끝나야 함)을 통째로 읽습니다. 응답 `200` `{"content": "...", "hash": "<sha256>"}`
+INI 파일 패턴에 맞는 `path`(절대 경로) 파일을 통째로 읽습니다. 응답 `200` `{"content": "...", "hash": "<sha256>"}`
 
 | 상태 코드 | 의미 |
 |---|---|
-| `400` | INI 폴더가 등록되지 않음, `.ini` 가 아님, 잘못된 경로 |
+| `400` | 패턴이 등록되지 않음, 패턴에 맞지 않는 경로 |
 | `404` | 없는 프로세스 |
 | `422` | UTF-8 이 아닌 파일 (EUC-KR 등). 그대로 저장하면 글자가 깨지므로 열지 않습니다 |
 | `502` | SSH 실패, 파일 없음 · 권한 없음, 1MB 초과 |
 
-### PUT /api/processes/:id/ini?path=env/app.ini
+### PUT /api/processes/:id/ini?path=/opt/shelter/conf/app.ini
 
 파일 내용을 바꿉니다. 본문 `{"content": "...", "baseHash": "<읽을 때 받은 hash>"}`, 응답은 GET 과 같은 형식(새 hash)입니다.
 

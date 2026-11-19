@@ -24,7 +24,7 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
   const { config, loading, error, reload, refresh, save, apply } = useProcessConfig();
   const [filter, setFilter] = useState('');
   const [editorOpen, setEditorOpen] = useState(false);
-  /** 열려 있는 로그 · INI 폴더 창 */
+  /** 열려 있는 로그 · INI 파일 목록 창 */
   const [fileTarget, setFileTarget] = useState<{ process: ProcessEntry; serverLabel: string; root: FileRoot } | null>(null);
   /** 열려 있는 자동 재시작 · 감시 조건 창 */
   const [watchTarget, setWatchTarget] = useState<{ process: ProcessEntry; serverLabel: string; watch: WatchStatus | undefined } | null>(null);

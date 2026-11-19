@@ -5,18 +5,19 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"net/http"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 )
 
-// 프로세스마다 등록한 두 폴더 아래의 파일을 다룬다.
+// 프로세스마다 등록한 파일 패턴(logFiles · iniFiles)에 맞는 파일만 다룬다. 폴더를 둘러보는 기능은 없다.
 //
-//	log : 로그 폴더(logDir)  - 모든 파일 · 폴더를 보여주고, 파일은 tail 로 끝부분만 읽는다.
-//	ini : 설정 폴더(configDir) - 폴더와 *.ini 파일만 보여주고, *.ini 파일을 통째로 읽고 쓴다.
+//	log : 로그 파일 패턴에 맞는 파일 목록, 파일은 tail 로 끝부분만 읽는다.
+//	ini : INI 파일 패턴에 맞는 파일 목록, 파일을 통째로 읽고 쓴다.
 //
-// 경로는 폴더 기준 상대 경로로 받고, 폴더 밖을 가리키는 경로('..')는 거부한다. (rootPath)
+// 목록은 서버의 셸이 패턴을 펼친 결과이고, 읽기 · 쓰기 요청의 경로는 Go 서버가 다시 패턴에 맞는지 확인한다. (resolveFile)
 const (
 	RootLog = "log"
 	RootINI = "ini"
@@ -25,8 +26,9 @@ const (
 )
 
 type FileEntry struct {
-	Name string `json:"name"`
-	// dir · file · link · other
+	// 절대 경로
+	Path string `json:"path"`
+	// file · link (패턴에 맞은 폴더 · 장치 파일은 목록에서 뺀다)
 	Type string `json:"type"`
 	Size int64  `json:"size"`
 	// ls 가 보여주는 수정 시각 그대로 ("Nov 19 11:15", 오래된 파일은 "Nov 19  2025")
@@ -36,8 +38,9 @@ type FileEntry struct {
 }
 
 type FileList struct {
-	// 폴더 기준 상대 경로 ("" 이면 등록한 폴더)
-	Path    string      `json:"path"`
+	// 등록한 패턴
+	Patterns []string `json:"patterns"`
+	// 최근 수정 순
 	Entries []FileEntry `json:"entries"`
 	// maxLogEntries 개를 넘어서 오래된 항목을 잘랐는지
 	Truncated bool `json:"truncated,omitempty"`
@@ -50,54 +53,47 @@ type INIFile struct {
 	Hash    string `json:"hash"`
 }
 
-// Files 는 프로세스의 로그 · 설정 폴더 아래 rel 폴더의 목록을 최근 수정 순으로 돌려준다. (폴더가 먼저)
-// 설정 폴더(ini)는 폴더와 *.ini 파일만 보여준다.
-func (m *Monitor) Files(ctx context.Context, processID, root, rel string) (*FileList, error) {
+// Files 는 프로세스의 로그 · INI 파일 패턴에 맞는 파일을 최근 수정 순으로 돌려준다.
+func (m *Monitor) Files(ctx context.Context, processID, root string) (*FileList, error) {
 	process, server, err := m.find(processID)
 	if err != nil {
 		return nil, err
 	}
-	dir, err := rootPath(process, root, rel)
+	patterns, err := filePatterns(process, root)
 	if err != nil {
 		return nil, err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
-	// cd 로 폴더인지 · 들어갈 수 있는지 먼저 확인한다. (파이프 뒤의 head 때문에 ls 의 실패는 알 수 없으므로)
-	command := fmt.Sprintf("cd -- '%s' || exit 1; [ -r . ] || { echo '읽기 권한이 없습니다' >&2; exit 1; }; LC_ALL=C ls -lAnt | head -n %d", dir, maxLogEntries+2)
+	// 패턴은 따옴표 없이 넣어 셸이 펼치게 한다. (Validate 에서 경로 문자와 * ? 만 허용했다)
+	// 맞는 파일이 없는 패턴은 ls 가 "없음" 오류를 내므로 오류 출력과 종료 코드는 무시한다.
+	command := fmt.Sprintf("LC_ALL=C ls -lndt -- %s 2>/dev/null | head -n %d; exit 0", strings.Join(patterns, " "), maxLogEntries+1)
 	output, err := m.remote.run(ctx, server, command)
 	if err != nil {
 		return nil, err
 	}
-	entries := parseLS(output)
-	if root == RootINI {
-		kept := []FileEntry{}
-		for _, entry := range entries {
-			if entry.Type == "dir" || (entry.Type != "other" && isINI(entry.Name)) {
-				kept = append(kept, entry)
-			}
+	entries := []FileEntry{}
+	for _, entry := range parseLS(output) {
+		// 셸이 펼친 결과도 한 번 더 패턴과 맞춰 본다. (파일 이름에 공백 등이 있어 잘못 읽은 줄을 거르기 위해)
+		if (entry.Type == "file" || entry.Type == "link") && matchesAny(patterns, entry.Path) {
+			entries = append(entries, entry)
 		}
-		entries = kept
 	}
-	list := &FileList{Path: rel, Entries: entries}
+	list := &FileList{Patterns: patterns, Entries: entries}
 	if len(entries) > maxLogEntries {
 		list.Entries, list.Truncated = entries[:maxLogEntries], true
 	}
 	return list, nil
 }
 
-// Log 는 프로세스 로그 폴더 아래 rel 파일의 마지막 lines 줄을 돌려준다.
-func (m *Monitor) Log(ctx context.Context, processID, rel string, lines int) (string, error) {
+// Log 는 로그 파일 패턴에 맞는 file 의 마지막 lines 줄을 돌려준다.
+func (m *Monitor) Log(ctx context.Context, processID, file string, lines int) (string, error) {
 	process, server, err := m.find(processID)
 	if err != nil {
 		return "", err
 	}
-	if rel == "" {
-		return "", &UserError{http.StatusBadRequest, "파일을 골라야 합니다"}
-	}
-	file, err := rootPath(process, RootLog, rel)
-	if err != nil {
+	if err := resolveFile(process, RootLog, file); err != nil {
 		return "", err
 	}
 	lines = max(1, min(lines, maxLogLines))
@@ -107,9 +103,9 @@ func (m *Monitor) Log(ctx context.Context, processID, rel string, lines int) (st
 	return m.remote.run(ctx, server, fmt.Sprintf("tail -n %d -- '%s'", lines, file))
 }
 
-// ReadINI 는 프로세스 설정 폴더 아래 rel(*.ini) 파일을 통째로 읽는다.
-func (m *Monitor) ReadINI(ctx context.Context, processID, rel string) (*INIFile, error) {
-	_, server, file, err := m.findINI(processID, rel)
+// ReadINI 는 INI 파일 패턴에 맞는 file 을 통째로 읽는다.
+func (m *Monitor) ReadINI(ctx context.Context, processID, file string) (*INIFile, error) {
+	server, err := m.findINI(processID, file)
 	if err != nil {
 		return nil, err
 	}
@@ -118,11 +114,11 @@ func (m *Monitor) ReadINI(ctx context.Context, processID, rel string) (*INIFile,
 	return m.readINI(ctx, server, file)
 }
 
-// WriteINI 는 rel(*.ini) 파일을 content 로 바꾼다. baseHash 는 화면이 읽었던 내용의 hash 로,
+// WriteINI 는 INI 파일 패턴에 맞는 file 을 content 로 바꾼다. baseHash 는 화면이 읽었던 내용의 hash 로,
 // 지금 파일과 다르면(그 사이 다른 곳에서 고쳤으면) 덮어쓰지 않고 409 를 돌려준다.
 // 바꾸기 전 내용은 같은 폴더의 '<파일>.bak' 에 남긴다.
-func (m *Monitor) WriteINI(ctx context.Context, processID, rel, content, baseHash string) (*INIFile, error) {
-	_, server, file, err := m.findINI(processID, rel)
+func (m *Monitor) WriteINI(ctx context.Context, processID, file, content, baseHash string) (*INIFile, error) {
+	server, err := m.findINI(processID, file)
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +127,7 @@ func (m *Monitor) WriteINI(ctx context.Context, processID, rel, content, baseHas
 	}
 
 	// 같은 파일을 동시에 저장하지 않는다.
-	key := "ini:" + processID + "/" + rel
+	key := "ini:" + processID + ":" + file
 	m.mu.Lock()
 	if m.busy[key] {
 		m.mu.Unlock()
@@ -166,16 +162,12 @@ func (m *Monitor) WriteINI(ctx context.Context, processID, rel, content, baseHas
 	return &INIFile{Content: content, Hash: contentHash(content)}, nil
 }
 
-func (m *Monitor) findINI(processID, rel string) (Process, Server, string, error) {
+func (m *Monitor) findINI(processID, file string) (Server, error) {
 	process, server, err := m.find(processID)
 	if err != nil {
-		return Process{}, Server{}, "", err
+		return Server{}, err
 	}
-	if !isINI(rel) {
-		return Process{}, Server{}, "", &UserError{http.StatusBadRequest, ".ini 파일만 열 수 있습니다"}
-	}
-	file, err := rootPath(process, RootINI, rel)
-	return process, server, file, err
+	return server, resolveFile(process, RootINI, file)
 }
 
 func (m *Monitor) readINI(ctx context.Context, server Server, file string) (*INIFile, error) {
@@ -199,53 +191,62 @@ func isINI(name string) bool {
 	return strings.HasSuffix(strings.ToLower(name), ".ini")
 }
 
-// rootPath 는 로그 · 설정 폴더 아래의 상대 경로를 절대 경로로 바꾼다. 폴더 밖으로 나가는 경로('..')는 거부한다.
-// 결과는 작은따옴표로 감싸 명령에 넣으므로 작은따옴표와 제어 문자도 거부한다.
-// (폴더 안의 심볼릭 링크가 가리키는 곳까지 막지는 않는다)
-func rootPath(process Process, root, rel string) (string, error) {
-	var dir string
+// filePatterns 는 root(log · ini)에 등록한 파일 패턴이다.
+func filePatterns(process Process, root string) ([]string, error) {
 	switch root {
 	case RootLog:
-		if dir = process.LogDir; dir == "" {
-			return "", &UserError{http.StatusBadRequest, "로그 폴더가 등록되지 않았습니다"}
+		if len(process.LogFiles) == 0 {
+			return nil, &UserError{http.StatusBadRequest, "로그 파일 패턴이 등록되지 않았습니다"}
 		}
+		return process.LogFiles, nil
 	case RootINI:
-		if dir = process.ConfigDir; dir == "" {
-			return "", &UserError{http.StatusBadRequest, "설정(INI) 폴더가 등록되지 않았습니다"}
+		if len(process.IniFiles) == 0 {
+			return nil, &UserError{http.StatusBadRequest, "INI 파일 패턴이 등록되지 않았습니다"}
 		}
-	default:
-		return "", &UserError{http.StatusBadRequest, fmt.Sprintf("알 수 없는 폴더 종류입니다: %s", root)}
+		return process.IniFiles, nil
 	}
-	if rel == "" {
-		return dir, nil
-	}
-	invalid := &UserError{http.StatusBadRequest, fmt.Sprintf("열 수 없는 경로입니다: %s", rel)}
-	for _, segment := range strings.Split(rel, "/") {
-		if segment == "" || segment == "." || segment == ".." {
-			return "", invalid
-		}
-	}
-	for _, r := range rel {
-		if r == '\'' || r < 0x20 || r == 0x7f {
-			return "", invalid
-		}
-	}
-	return dir + "/" + rel, nil
+	return nil, &UserError{http.StatusBadRequest, fmt.Sprintf("알 수 없는 파일 종류입니다: %s", root)}
 }
 
-// "-rw-r--r--  1 1000  1000  1234 Nov 19 11:15 app.log" 형식의 ls -ln 출력을 읽는다. (LC_ALL=C)
-// 날짜는 "Nov 19 11:15" 또는 "Nov 19  2025". 장치 파일처럼 크기 자리가 다른 줄과 "total" 줄은 건너뛴다.
+// resolveFile 은 화면이 고른 파일이 등록한 패턴에 맞는지 확인한다. 맞지 않으면 열지 않는다.
+// 경로는 작은따옴표로 감싸 명령에 넣으므로 작은따옴표와 제어 문자도 거부한다.
+// (패턴에 맞는 심볼릭 링크가 가리키는 곳까지 막지는 않는다)
+func resolveFile(process Process, root, file string) error {
+	patterns, err := filePatterns(process, root)
+	if err != nil {
+		return err
+	}
+	if file == "" {
+		return &UserError{http.StatusBadRequest, "파일을 골라야 합니다"}
+	}
+	invalid := &UserError{http.StatusBadRequest, fmt.Sprintf("등록한 패턴에 맞지 않는 파일입니다: %s", file)}
+	if !strings.HasPrefix(file, "/") || path.Clean(file) != file {
+		return invalid
+	}
+	for _, r := range file {
+		if r == '\'' || r < 0x20 || r == 0x7f {
+			return invalid
+		}
+	}
+	if !matchesAny(patterns, file) {
+		return invalid
+	}
+	return nil
+}
+
+// "-rw-r--r--  1 1000  1000  1234 Nov 19 11:15 /opt/app/logs/app.log" 형식의 ls -ln 출력을 읽는다. (LC_ALL=C)
+// 날짜는 "Nov 19 11:15" 또는 "Nov 19  2025". 장치 파일처럼 크기 자리가 다른 줄은 건너뛴다. 순서는 ls 그대로 둔다.
 var lsLine = regexp.MustCompile(`^([-dlcbps])\S*\s+\d+\s+\S+\s+\S+\s+(\d+)\s+(\S+\s+\d+\s+[\d:]+)\s(.+)$`)
 
 func parseLS(output string) []FileEntry {
-	var dirs, others []FileEntry
+	entries := []FileEntry{}
 	for _, line := range strings.Split(output, "\n") {
 		match := lsLine.FindStringSubmatch(line)
 		if match == nil {
 			continue
 		}
 		size, _ := strconv.ParseInt(match[2], 10, 64)
-		entry := FileEntry{Name: match[4], Size: size, Modified: match[3]}
+		entry := FileEntry{Path: match[4], Size: size, Modified: match[3]}
 		switch match[1] {
 		case "d":
 			entry.Type = "dir"
@@ -253,17 +254,13 @@ func parseLS(output string) []FileEntry {
 			entry.Type = "file"
 		case "l":
 			entry.Type = "link"
-			if name, target, ok := strings.Cut(entry.Name, " -> "); ok {
-				entry.Name, entry.Target = name, target
+			if name, target, ok := strings.Cut(entry.Path, " -> "); ok {
+				entry.Path, entry.Target = name, target
 			}
 		default:
 			entry.Type = "other"
 		}
-		if entry.Type == "dir" {
-			dirs = append(dirs, entry)
-		} else {
-			others = append(others, entry)
-		}
+		entries = append(entries, entry)
 	}
-	return append(append([]FileEntry{}, dirs...), others...)
+	return entries
 }

@@ -103,6 +103,8 @@ func TestMonitorOverSSH(t *testing.T) {
 	script := filepath.Join(dir, "start.sh")
 	logDir := filepath.Join(dir, "logs")
 	os.MkdirAll(filepath.Join(logDir, "old"), 0o755)
+	os.WriteFile(filepath.Join(logDir, "old", "app.log"), []byte("old\n"), 0o644)
+	os.WriteFile(filepath.Join(logDir, "secret.txt"), []byte("x"), 0o644)
 	os.WriteFile(script, []byte("#!/bin/sh\nexec sleep "+marker+"\n"), 0o755)
 	os.WriteFile(filepath.Join(logDir, "app.log"), []byte("line1\nline2\nline3\n"), 0o644)
 	configDir := filepath.Join(dir, "conf")
@@ -119,7 +121,7 @@ func TestMonitorOverSSH(t *testing.T) {
 			{ID: "local", Group: "uw", Host: host, Port: port, User: "ops", Password: "pw"},
 			{ID: "wrong-pw", Group: "uw", Host: host, Port: port, User: "ops", Password: "nope"},
 		},
-		Processes: []Process{{ID: "app", Server: "local", Match: "^sleep " + marker + "$", LogDir: logDir, ConfigDir: configDir, StartScript: script,
+		Processes: []Process{{ID: "app", Server: "local", Match: "^sleep " + marker + "$", LogFiles: []string{logDir + "/*.log", logDir + "/*/*.log"}, IniFiles: []string{configDir + "/*.ini"}, StartScript: script,
 			AutoRestart: true, WatchName: "sleep", WatchArgs: marker}},
 	})
 	if _, err := store.Save(body); err != nil {
@@ -178,32 +180,32 @@ func TestMonitorOverSSH(t *testing.T) {
 		t.Errorf("second start: %v", err)
 	}
 
-	if output, err := monitor.Log(ctx, "app", "app.log", 2); err != nil || output != "line2\nline3\n" {
+	appLog, appINI := logDir+"/app.log", configDir+"/app.ini"
+	if output, err := monitor.Log(ctx, "app", appLog, 2); err != nil || output != "line2\nline3\n" {
 		t.Errorf("log = %q, %v", output, err)
 	}
-	if _, err := monitor.Log(ctx, "app", "../start.sh", 2); !isStatus(err, http.StatusBadRequest) {
-		t.Errorf("log outside logDir: %v", err)
+	if _, err := monitor.Log(ctx, "app", logDir+"/secret.txt", 2); !isStatus(err, http.StatusBadRequest) {
+		t.Errorf("log outside patterns: %v", err)
 	}
-	if list, err := monitor.Files(ctx, "app", RootLog, ""); err != nil || len(list.Entries) != 2 ||
-		list.Entries[0].Name != "old" || list.Entries[0].Type != "dir" || list.Entries[1].Name != "app.log" || list.Entries[1].Size != 18 {
+	// 패턴에 맞는 파일만 (폴더 old, secret.txt 는 빠진다)
+	if list, err := monitor.Files(ctx, "app", RootLog); err != nil || len(list.Entries) != 2 {
 		t.Errorf("files = %+v, %v", list, err)
-	}
-	if list, err := monitor.Files(ctx, "app", RootLog, "old"); err != nil || len(list.Entries) != 0 {
-		t.Errorf("empty dir = %+v, %v", list, err)
-	}
-	if _, err := monitor.Files(ctx, "app", RootLog, "app.log"); err == nil {
-		t.Error("listing a file should fail")
+	} else {
+		paths := map[string]bool{list.Entries[0].Path: true, list.Entries[1].Path: true}
+		if !paths[appLog] || !paths[logDir+"/old/app.log"] {
+			t.Errorf("files = %+v", list.Entries)
+		}
 	}
 
-	// INI: 폴더와 *.ini 만 보이고, 읽고 쓸 수 있다.
-	if list, err := monitor.Files(ctx, "app", RootINI, ""); err != nil || len(list.Entries) != 3 || list.Entries[0].Name != "sub" {
+	// INI: *.ini 만 보이고, 읽고 쓸 수 있다. (하위 폴더 sub 와 notes.txt 는 빠진다)
+	if list, err := monitor.Files(ctx, "app", RootINI); err != nil || len(list.Entries) != 2 {
 		t.Errorf("ini files = %+v, %v", list, err)
 	}
-	ini, err := monitor.ReadINI(ctx, "app", "app.ini")
+	ini, err := monitor.ReadINI(ctx, "app", appINI)
 	if err != nil || ini.Content != "[db]\r\nhost=a\r\n" {
 		t.Fatalf("read ini = %+v, %v", ini, err)
 	}
-	if _, err := monitor.WriteINI(ctx, "app", "app.ini", "[db]\r\nhost=b\r\n", ini.Hash); err != nil {
+	if _, err := monitor.WriteINI(ctx, "app", appINI, "[db]\r\nhost=b\r\n", ini.Hash); err != nil {
 		t.Fatalf("write ini: %v", err)
 	}
 	written, _ := os.ReadFile(filepath.Join(configDir, "app.ini"))
@@ -215,17 +217,17 @@ func TestMonitorOverSSH(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(configDir, "app.ini.pm-new")); !os.IsNotExist(err) {
 		t.Errorf("temp file left: %v", err)
 	}
-	if _, err := monitor.WriteINI(ctx, "app", "app.ini", "stale", ini.Hash); !isStatus(err, http.StatusConflict) {
+	if _, err := monitor.WriteINI(ctx, "app", appINI, "stale", ini.Hash); !isStatus(err, http.StatusConflict) {
 		t.Errorf("stale write: %v", err)
 	}
-	if _, err := monitor.ReadINI(ctx, "app", "euckr.ini"); !isStatus(err, http.StatusUnprocessableEntity) {
+	if _, err := monitor.ReadINI(ctx, "app", configDir+"/euckr.ini"); !isStatus(err, http.StatusUnprocessableEntity) {
 		t.Errorf("non-utf8: %v", err)
 	}
-	if _, err := monitor.ReadINI(ctx, "app", "notes.txt"); !isStatus(err, http.StatusBadRequest) {
+	if _, err := monitor.ReadINI(ctx, "app", configDir+"/notes.txt"); !isStatus(err, http.StatusBadRequest) {
 		t.Errorf("non-ini: %v", err)
 	}
-	if _, err := monitor.ReadINI(ctx, "app", "../logs/app.ini"); !isStatus(err, http.StatusBadRequest) {
-		t.Errorf("outside configDir: %v", err)
+	if _, err := monitor.ReadINI(ctx, "app", configDir+"/../conf/app.ini"); !isStatus(err, http.StatusBadRequest) {
+		t.Errorf("unclean path: %v", err)
 	}
 
 	if _, err := monitor.Control(ctx, "app", "restart"); err != nil {
