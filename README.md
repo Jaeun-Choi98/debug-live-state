@@ -15,8 +15,8 @@
   시작 스크립트 경로만 적습니다. Go 서버가 `ps`, `ls`, `tail`, `kill -TERM <PID>`, `nohup <스크립트>` 만 만들어
   실행하며, 설정의 경로는 셸 특수문자가 없는 절대 경로만 허용합니다.
 - **파일은 시작 스크립트 폴더 기준으로**: 폴더를 둘러보는 기능은 없고, 정해진 패턴에 맞는 파일만 보입니다.
-  패턴을 비워 두면 시작 스크립트 폴더 아래 4단계까지의 `*.log`, 3단계까지의 `*.ini` 를 찾습니다.
-  (`/opt/shelter/start.sh` → `/opt/shelter/*.log`, `/opt/shelter/*/*.log`, `/opt/shelter/*/*/*.log`, `/opt/shelter/*/*/*/*.log`)
+  패턴을 비워 두면 시작 스크립트 폴더 아래 5단계까지의 `*.log`, 3단계까지의 `*.ini` 를 찾습니다.
+  (`/opt/shelter/start.sh` → `/opt/shelter/*.log`, `/opt/shelter/*/*.log` … `/opt/shelter/*/*/*/*/*.log`)
   다른 곳을 보려면 패턴(`logFiles` · `iniFiles`)을 적습니다. 상대 경로(`logs/*.log`)는 시작 스크립트 폴더 기준, 절대 경로는 그대로입니다.
   읽기 · 쓰기 요청이 오면 Go 서버가 경로가 패턴에 맞는지 다시 확인합니다. `* ?` 는 `/` 를 넘지 않고(`**` 금지), 앞의 두 폴더는
   와일드카드 없이 적어야 해서 `/home/*`, `/*/app.log` 처럼 넓은 곳을 훑는 패턴은 저장되지 않습니다. 시작 스크립트가 `/opt/start.sh`
@@ -89,7 +89,7 @@
 | `servers[].label` | | 표시 이름 (생략 시 id) |
 | `processes[].id` / `server` | ✓ | 고유 id / 서버 id |
 | `processes[].match` | ✓ | `ps` 명령줄에 대한 정규식(Go RE2). 다른 프로세스와 겹치지 않게 구체적으로 (`worker\.sh` 는 `com.apple.mdworker.shared` 에도 맞습니다) |
-| `processes[].logFiles` | | 로그 파일 패턴 목록 (선택, 최대 10개). 비우면 시작 스크립트 폴더 아래 4단계까지의 `*.log`. 상대 경로는 시작 스크립트 폴더 기준. 설정 창에서는 쉼표로 나눠 적습니다 |
+| `processes[].logFiles` | | 로그 파일 패턴 목록 (선택, 최대 10개). 비우면 시작 스크립트 폴더 아래 5단계까지의 `*.log`. 상대 경로는 시작 스크립트 폴더 기준. 설정 창에서는 쉼표로 나눠 적습니다 |
 | `processes[].iniFiles` | | INI 파일 패턴 목록 (선택, 최대 10개, `.ini` 로 끝나야 함). 비우면 시작 스크립트 폴더 아래 3단계까지의 `*.ini` |
 | `processes[].startScript` | | 시작 · 재시작 때 인자 없이 실행할 스크립트의 절대 경로. 스크립트가 있는 폴더에서 `nohup` 으로 실행하고 출력은 버리므로, 로그는 스크립트가 직접 남겨야 합니다 |
 | `processes[].label` | | 표시 이름 (생략 시 id) |

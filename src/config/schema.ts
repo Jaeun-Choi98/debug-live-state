@@ -10,7 +10,7 @@ export const RESERVED_SLUGS = ['all', 'api', 'config', 'static', 'log-config'];
 const MAX_FILE_PATTERNS = 10;
 
 /** 패턴을 비워 두었을 때 시작 스크립트 폴더 아래에서 찾는 깊이 (Go 서버의 defaultPatternDepth). 로그는 한 단계 더 */
-const DEFAULT_PATTERN_DEPTH = { log: 4, ini: 3 };
+const DEFAULT_PATTERN_DEPTH = { log: 5, ini: 3 };
 
 const dirname = (file: string) => file.slice(0, file.lastIndexOf('/')) || '/';
 
@@ -28,7 +28,7 @@ function resolvePattern(startScript: string | undefined, pattern: unknown): { pa
 /**
  * 실제로 쓰는 로그 · INI 파일 패턴(절대 경로)과, 없으면 그 이유. (Go 서버의 Process.EffectivePatterns)
  *   적어 둔 패턴이 있으면: 상대 경로는 시작 스크립트 폴더 기준, 절대 경로는 그대로
- *   비워 두었으면: 시작 스크립트 폴더 아래 *.log(4단계) / *.ini(3단계)
+ *   비워 두었으면: 시작 스크립트 폴더 아래 *.log(5단계) / *.ini(3단계)
  */
 export function effectivePatterns(
   process: { startScript?: string; logFiles?: string[]; iniFiles?: string[] },

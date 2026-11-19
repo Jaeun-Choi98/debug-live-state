@@ -125,7 +125,7 @@ func TestMonitorOverSSH(t *testing.T) {
 		},
 		Processes: []Process{{ID: "app", Server: "local", Match: "^sleep " + marker + "$", LogFiles: []string{logDir + "/*.log", logDir + "/*/*.log"}, IniFiles: []string{configDir + "/*.ini"}, StartScript: script,
 			AutoRestart: true, WatchName: "sleep", WatchArgs: marker},
-			// 패턴 없이 시작 스크립트만: 그 폴더(dir) 아래 *.log(4단계) · *.ini(3단계)를 찾는다.
+			// 패턴 없이 시작 스크립트만: 그 폴더(dir) 아래 *.log(5단계) · *.ini(3단계)를 찾는다.
 			{ID: "auto", Server: "local", Match: "^never-matches$", StartScript: script}},
 	})
 	if _, err := store.Save(body); err != nil {

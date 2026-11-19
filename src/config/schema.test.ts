@@ -82,6 +82,7 @@ test('file patterns default to the start script folder and resolve relative path
     '/opt/shelter/*/*.log',
     '/opt/shelter/*/*/*.log',
     '/opt/shelter/*/*/*/*.log',
+    '/opt/shelter/*/*/*/*/*.log',
   ]);
   expect(effectivePatterns({ startScript: '/opt/shelter/start.sh', iniFiles: ['conf/*.ini', '/etc/shelter/*.ini'] }, 'ini').patterns).toEqual([
     '/opt/shelter/conf/*.ini',

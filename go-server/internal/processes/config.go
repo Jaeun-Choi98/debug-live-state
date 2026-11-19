@@ -59,7 +59,7 @@ type Process struct {
 	Label  string `json:"label,omitempty"`
 	// ps 의 명령줄(args)에 대한 정규식. 일치하는 프로세스를 이 항목의 실행 인스턴스로 본다.
 	Match string `json:"match"`
-	// 로그 파일 패턴 (선택). 비워 두면 시작 스크립트 폴더 아래 4단계까지의 *.log 를 찾는다. (EffectivePatterns)
+	// 로그 파일 패턴 (선택). 비워 두면 시작 스크립트 폴더 아래 5단계까지의 *.log 를 찾는다. (EffectivePatterns)
 	// 상대 경로(logs/*.log)는 시작 스크립트 폴더 기준, 절대 경로(/var/log/app/*.log)는 그대로 쓴다.
 	// 화면에는 이 패턴에 맞는 파일만 보이고, tail 로 끝부분을 읽는다.
 	LogFiles []string `json:"logFiles,omitempty"`
@@ -275,13 +275,13 @@ func checkFilePattern(pattern string, ini bool) string {
 }
 
 // 패턴을 비워 두었을 때 시작 스크립트 폴더 아래에서 찾는 깊이 (폴더 바로 아래 포함)
-// 로그는 날짜 · 종류별 폴더가 겹쳐 있는 경우가 많아 한 단계 더 찾는다. (logs/2026/11/app.log)
-var defaultPatternDepth = map[string]int{RootLog: 4, RootINI: 3}
+// 로그는 날짜 · 종류별 폴더가 겹쳐 있는 경우가 많아 더 깊이 찾는다. (logs/2026/11/19/app.log)
+var defaultPatternDepth = map[string]int{RootLog: 5, RootINI: 3}
 
 // EffectivePatterns 는 실제로 쓰는 로그 · INI 파일 패턴(절대 경로)이다.
 //
 //	적어 둔 패턴이 있으면: 상대 경로는 시작 스크립트 폴더 기준으로 바꾸고, 절대 경로는 그대로.
-//	비워 두었으면: 시작 스크립트 폴더의 *.ext, */*.ext ... (로그 4단계, INI 3단계. 예: /opt/shelter/start.sh → /opt/shelter/*.log ...)
+//	비워 두었으면: 시작 스크립트 폴더의 *.ext, */*.ext ... (로그 5단계, INI 3단계. 예: /opt/shelter/start.sh → /opt/shelter/*.log ...)
 //
 // 쓸 수 있는 패턴이 없으면 이유를 함께 돌려준다. (시작 스크립트가 없음, 폴더가 너무 얕음 등)
 func (p Process) EffectivePatterns(root string) ([]string, string) {

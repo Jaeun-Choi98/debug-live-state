@@ -95,7 +95,7 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 | processes[].server | O | 서버 id |
 | processes[].label | | 표시 이름 (없으면 id) |
 | processes[].match | O | ps 명령줄(args)에 대한 정규식 (Go RE2 문법) |
-| processes[].logFiles | | 로그 파일 패턴 목록 (선택, 최대 10개). **비우면 시작 스크립트 폴더의 `*.log`, `*/*.log`, `*/*/*.log`, `*/*/*/*.log`**. 상대 경로는 시작 스크립트 폴더 기준(`..` 금지), 절대 경로는 그대로. 영문 · 숫자 · `. _ - /` 와 `* ?`. `* ?` 는 `/` 를 넘지 않고 `**` 는 금지, 펼친 경로의 앞 두 폴더는 와일드카드 없이 |
+| processes[].logFiles | | 로그 파일 패턴 목록 (선택, 최대 10개). **비우면 시작 스크립트 폴더의 `*.log`, `*/*.log` … `*/*/*/*/*.log` (5단계)**. 상대 경로는 시작 스크립트 폴더 기준(`..` 금지), 절대 경로는 그대로. 영문 · 숫자 · `. _ - /` 와 `* ?`. `* ?` 는 `/` 를 넘지 않고 `**` 는 금지, 펼친 경로의 앞 두 폴더는 와일드카드 없이 |
 | processes[].iniFiles | | INI 파일 패턴 목록 (선택). 비우면 시작 스크립트 폴더 아래 3단계까지의 `*.ini`. 규칙은 logFiles 와 같고 `.ini` 로 끝나야 합니다 |
 | processes[].startScript | | 시작 스크립트 절대 경로 (영문 · 숫자 · `. _ - /`) |
 | processes[].autoRestart | | `true` 면 자동 재시작. `startScript` 와, `watchName` · `watchArgs` 중 하나 이상 필요 |

@@ -310,7 +310,7 @@ func TestEffectivePatterns(t *testing.T) {
 		}
 	}
 	app := Process{StartScript: "/opt/shelter/start.sh"}
-	check(app, RootLog, "[/opt/shelter/*.log /opt/shelter/*/*.log /opt/shelter/*/*/*.log /opt/shelter/*/*/*/*.log]", false)
+	check(app, RootLog, "[/opt/shelter/*.log /opt/shelter/*/*.log /opt/shelter/*/*/*.log /opt/shelter/*/*/*/*.log /opt/shelter/*/*/*/*/*.log]", false)
 	check(app, RootINI, "[/opt/shelter/*.ini /opt/shelter/*/*.ini /opt/shelter/*/*/*.ini]", false)
 
 	// 적어 둔 패턴: 상대 경로는 시작 스크립트 폴더 기준, 절대 경로는 그대로
