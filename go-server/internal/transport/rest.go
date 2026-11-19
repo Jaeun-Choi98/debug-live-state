@@ -3,9 +3,12 @@ package rest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"path"
 	"pjt/internal/config"
 	"pjt/internal/processes"
 	"strconv"
@@ -51,6 +54,7 @@ func New(cfg *config.Configuration) *RestServer {
 	api.GET("/status", handleStatus(monitor))
 	api.GET("/processes/:id/files", handleFiles(monitor))
 	api.GET("/processes/:id/log", handleLog(monitor))
+	api.GET("/processes/:id/log/download", handleDownloadLog(monitor))
 	api.GET("/processes/:id/ini", handleReadINI(monitor))
 	api.PUT("/processes/:id/ini", requireJSON, handleWriteINI(monitor))
 	api.PUT("/processes/:id/watch", requireJSON, handleUpdateWatch(store, monitor))
@@ -194,6 +198,43 @@ func handleLog(monitor *processes.Monitor) gin.HandlerFunc {
 		c.Header("Cache-Control", "no-store")
 		c.JSON(http.StatusOK, gin.H{"output": output})
 	}
+}
+
+// GET /api/processes/:id/log/download?path=/opt/app/logs/app.log : 로그 파일 전체 내려받기 ( 첨부 파일로 응답 )
+func handleDownloadLog(monitor *processes.Monitor) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, file := c.Param("id"), c.Query("path")
+		started := false
+		err := monitor.DownloadLog(c.Request.Context(), id, file, func(size int64) io.Writer {
+			started = true
+			c.Header("Content-Type", "application/octet-stream")
+			c.Header("Content-Disposition", attachmentName(path.Base(file)))
+			c.Header("Content-Length", strconv.FormatInt(size, 10))
+			c.Header("Cache-Control", "no-store")
+			c.Status(http.StatusOK)
+			return c.Writer
+		})
+		switch {
+		case err != nil && !started:
+			respondError(c, err)
+		case err != nil:
+			// 이미 보내기 시작해서 상태 코드를 바꿀 수 없다. (브라우저에는 내려받기 실패로 보인다)
+			logger.Warnf("[REST] log download interrupted: %s %s, remote: %s, err: %v", id, file, c.ClientIP(), err)
+		default:
+			logger.Infof("[REST] log downloaded: %s %s, remote: %s", id, file, c.ClientIP())
+		}
+	}
+}
+
+// attachmentName 은 Content-Disposition 값이다. 영문 외 글자 · 공백이 있는 이름은 filename* 로 함께 보낸다.
+func attachmentName(name string) string {
+	fallback := []rune(name)
+	for i, r := range fallback {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '-' || r == '_') {
+			fallback[i] = '_'
+		}
+	}
+	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, string(fallback), url.PathEscape(name))
 }
 
 // GET /api/processes/:id/ini?path=/opt/app/conf/app.ini : INI 파일 패턴에 맞는 파일 내용과 hash

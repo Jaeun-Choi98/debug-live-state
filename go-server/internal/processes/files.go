@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"net/http"
 	"path"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -23,6 +25,8 @@ const (
 	RootINI = "ini"
 	// 화면에서 편집할 수 있는 INI 파일의 최대 크기
 	maxINIBytes = 1 << 20
+	// 로그 파일 전체 내려받기의 최대 시간
+	downloadTimeout = 30 * time.Minute
 )
 
 type FileEntry struct {
@@ -101,6 +105,38 @@ func (m *Monitor) Log(ctx context.Context, processID, file string, lines int) (s
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 	return m.remote.run(ctx, server, fmt.Sprintf("tail -n %d -- '%s'", lines, file))
+}
+
+// DownloadLog 는 로그 파일 패턴에 맞는 file 을 통째로 내려보낸다.
+// 먼저 크기를 재서 start(size) 로 알려주고(응답 헤더용), 받은 writer 로 그 크기만큼만 흘려보낸다.
+// (내려받는 동안 로그가 늘어나도 보낸 길이가 알려준 크기와 맞도록)
+// start 를 부른 뒤의 실패는 이미 일부를 보낸 뒤일 수 있다.
+func (m *Monitor) DownloadLog(ctx context.Context, processID, file string, start func(size int64) io.Writer) error {
+	process, server, err := m.find(processID)
+	if err != nil {
+		return err
+	}
+	if err := resolveFile(process, RootLog, file); err != nil {
+		return err
+	}
+
+	sizeCtx, cancel := context.WithTimeout(ctx, commandTimeout)
+	output, err := m.remote.run(sizeCtx, server, fmt.Sprintf(
+		`f='%s'; [ -f "$f" ] || { echo '파일이 없습니다' >&2; exit 1; }; [ -r "$f" ] || { echo '읽기 권한이 없습니다' >&2; exit 1; }; wc -c < "$f"`, file))
+	cancel()
+	if err != nil {
+		return err
+	}
+	size, err := strconv.ParseInt(strings.TrimSpace(output), 10, 64)
+	if err != nil {
+		return fmt.Errorf("파일 크기를 읽지 못했습니다: %q", output)
+	}
+
+	w := start(size)
+	// 파일이 클 수 있어 시간 제한을 길게 둔다. 브라우저가 내려받기를 취소하면 ctx 가 끝나 함께 멈춘다.
+	streamCtx, cancel := context.WithTimeout(ctx, downloadTimeout)
+	defer cancel()
+	return m.remote.stream(streamCtx, server, fmt.Sprintf("head -c %d -- '%s'", size, file), w)
 }
 
 // ReadINI 는 INI 파일 패턴에 맞는 file 을 통째로 읽는다.
@@ -191,21 +227,16 @@ func isINI(name string) bool {
 	return strings.HasSuffix(strings.ToLower(name), ".ini")
 }
 
-// filePatterns 는 root(log · ini)에 등록한 파일 패턴이다.
+// filePatterns 는 root(log · ini)에 실제로 쓰는 파일 패턴이다. (Process.EffectivePatterns)
 func filePatterns(process Process, root string) ([]string, error) {
-	switch root {
-	case RootLog:
-		if len(process.LogFiles) == 0 {
-			return nil, &UserError{http.StatusBadRequest, "로그 파일 패턴이 등록되지 않았습니다"}
-		}
-		return process.LogFiles, nil
-	case RootINI:
-		if len(process.IniFiles) == 0 {
-			return nil, &UserError{http.StatusBadRequest, "INI 파일 패턴이 등록되지 않았습니다"}
-		}
-		return process.IniFiles, nil
+	if root != RootLog && root != RootINI {
+		return nil, &UserError{http.StatusBadRequest, fmt.Sprintf("알 수 없는 파일 종류입니다: %s", root)}
 	}
-	return nil, &UserError{http.StatusBadRequest, fmt.Sprintf("알 수 없는 파일 종류입니다: %s", root)}
+	patterns, problem := process.EffectivePatterns(root)
+	if problem != "" {
+		return nil, &UserError{http.StatusBadRequest, problem}
+	}
+	return patterns, nil
 }
 
 // resolveFile 은 화면이 고른 파일이 등록한 패턴에 맞는지 확인한다. 맞지 않으면 열지 않는다.

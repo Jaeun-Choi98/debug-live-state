@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { FileList, ProcessEntry } from '../../config/types';
 import { requestApi } from '../../hooks/useProcessConfig';
 import IniEditor from '../IniEditor/IniEditor';
+import { effectivePatterns } from '../../config/schema';
 import './LogViewer.css';
 
 /** log: 로그 파일 패턴(logFiles), 파일은 tail 로 보기 / ini: INI 파일 패턴(iniFiles), 파일은 편집 */
@@ -140,6 +141,23 @@ const LogViewer: React.FC<LogViewerProps> = ({ process: target, serverLabel, roo
     .split('\n')
     .filter(line => line.toLowerCase().includes(lowerFilter));
 
+  /**
+   * 지금 화면에 보이는 줄(마지막 N줄, 거르기를 했으면 걸러진 줄)만 파일로 내려받는다.
+   * 이름은 원래 파일 이름에 범위를 붙인다. 예) app.log → app.last200.log, 거르기 → app.last200.filtered.log
+   */
+  const exportShown = () => {
+    if (file === null || output === null) return;
+    const [, name] = splitPath(file);
+    const dot = name.lastIndexOf('.');
+    const [stem, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ''];
+    const blob = new Blob([shownLines.join('\n') + '\n'], { type: 'text/plain;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `${stem}.last${lines}${filter ? '.filtered' : ''}${ext}`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
+
   return (
     <div className="log-viewer-backdrop" onMouseDown={e => e.target === e.currentTarget && close()}>
       <div className="log-viewer" role="dialog" aria-modal="true" aria-label={root === 'ini' ? 'INI 편집' : '로그 보기'}>
@@ -161,8 +179,8 @@ const LogViewer: React.FC<LogViewerProps> = ({ process: target, serverLabel, roo
             </button>
           )}
           {file === null ? (
-            <span className="log-viewer-patterns" title="⚙ 설정에서 등록한 패턴에 맞는 파일만 보입니다">
-              {(list?.patterns ?? (root === 'ini' ? target.iniFiles : target.logFiles) ?? []).join('\n')}
+            <span className="log-viewer-patterns" title="이 패턴에 맞는 파일만 보입니다 (⚙ 설정에서 비워 두면 시작 스크립트 폴더 기준)">
+              {(list?.patterns ?? effectivePatterns(target, root).patterns).join('\n')}
             </span>
           ) : (
             <span className="log-viewer-patterns">
@@ -246,6 +264,25 @@ const LogViewer: React.FC<LogViewerProps> = ({ process: target, serverLabel, roo
               <button className="btn btn-secondary" onClick={load} disabled={loading}>
                 {loading ? '읽는 중...' : '↻ 새로고침'}
               </button>
+              <span className="log-viewer-export">
+                <button
+                  className="btn btn-secondary"
+                  onClick={exportShown}
+                  disabled={output === null}
+                  title={`지금 보이는 ${filter ? '걸러진 ' : ''}줄만 (마지막 ${lines}줄 중 ${shownLines.length}줄) 내려받습니다`}
+                >
+                  ⤓ 화면 내용
+                </button>
+                {/* 전체 파일은 Go 서버가 첨부 파일로 보낸다. (큰 파일도 메모리에 모으지 않고 흘려보낸다) */}
+                <a
+                  className="btn btn-secondary"
+                  href={`${PROCESSES_API}/${encodeURIComponent(target.id)}/log/download?path=${encodeURIComponent(file)}`}
+                  download
+                  title="파일 전체를 내려받습니다"
+                >
+                  ⤓ 전체 파일
+                </a>
+              </span>
               <span className="log-viewer-time">{fetchedAt && fetchedAt.toLocaleTimeString()}</span>
             </div>
 

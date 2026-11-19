@@ -199,7 +199,7 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
         </div>
       </div>
 
-      {editorOpen && config && <ConfigEditor config={config} onSave={save} onClose={closeEditor} />}
+      {editorOpen && config && <ConfigEditor config={config} scope={slugExists ? slug : 'all'} onSave={save} onClose={closeEditor} />}
       {fileTarget && (
         <LogViewer process={fileTarget.process} serverLabel={fileTarget.serverLabel} root={fileTarget.root} onClose={closeFiles} />
       )}

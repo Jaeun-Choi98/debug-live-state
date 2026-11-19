@@ -1,12 +1,14 @@
 package processes
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -122,7 +124,9 @@ func TestMonitorOverSSH(t *testing.T) {
 			{ID: "wrong-pw", Group: "uw", Host: host, Port: port, User: "ops", Password: "nope"},
 		},
 		Processes: []Process{{ID: "app", Server: "local", Match: "^sleep " + marker + "$", LogFiles: []string{logDir + "/*.log", logDir + "/*/*.log"}, IniFiles: []string{configDir + "/*.ini"}, StartScript: script,
-			AutoRestart: true, WatchName: "sleep", WatchArgs: marker}},
+			AutoRestart: true, WatchName: "sleep", WatchArgs: marker},
+			// 패턴 없이 시작 스크립트만: 그 폴더(dir) 아래 *.log(4단계) · *.ini(3단계)를 찾는다.
+			{ID: "auto", Server: "local", Match: "^never-matches$", StartScript: script}},
 	})
 	if _, err := store.Save(body); err != nil {
 		t.Fatal(err)
@@ -187,6 +191,21 @@ func TestMonitorOverSSH(t *testing.T) {
 	if _, err := monitor.Log(ctx, "app", logDir+"/secret.txt", 2); !isStatus(err, http.StatusBadRequest) {
 		t.Errorf("log outside patterns: %v", err)
 	}
+
+	// 전체 내려받기: 크기를 먼저 알려주고 그만큼 보낸다. 패턴 밖 파일은 시작하기 전에 거부한다.
+	var downloaded bytes.Buffer
+	var announced int64 = -1
+	err = monitor.DownloadLog(ctx, "app", appLog, func(size int64) io.Writer { announced = size; return &downloaded })
+	if err != nil || announced != 18 || downloaded.String() != "line1\nline2\nline3\n" {
+		t.Errorf("download = %q (size %d), %v", downloaded.String(), announced, err)
+	}
+	started := false
+	if err := monitor.DownloadLog(ctx, "app", logDir+"/secret.txt", func(int64) io.Writer { started = true; return io.Discard }); !isStatus(err, http.StatusBadRequest) || started {
+		t.Errorf("download outside patterns: %v, started %v", err, started)
+	}
+	if err := monitor.DownloadLog(ctx, "app", logDir+"/missing.log", func(int64) io.Writer { started = true; return io.Discard }); err == nil || started {
+		t.Errorf("download missing file: %v, started %v", err, started)
+	}
 	// 패턴에 맞는 파일만 (폴더 old, secret.txt 는 빠진다)
 	if list, err := monitor.Files(ctx, "app", RootLog); err != nil || len(list.Entries) != 2 {
 		t.Errorf("files = %+v, %v", list, err)
@@ -195,6 +214,16 @@ func TestMonitorOverSSH(t *testing.T) {
 		if !paths[appLog] || !paths[logDir+"/old/app.log"] {
 			t.Errorf("files = %+v", list.Entries)
 		}
+	}
+
+	if list, err := monitor.Files(ctx, "auto", RootLog); err != nil || len(list.Entries) != 2 {
+		t.Errorf("auto log files = %+v, %v", list, err)
+	}
+	if list, err := monitor.Files(ctx, "auto", RootINI); err != nil || len(list.Entries) != 2 {
+		t.Errorf("auto ini files = %+v, %v", list, err)
+	}
+	if output, err := monitor.Log(ctx, "auto", appLog, 1); err != nil || output != "line3\n" {
+		t.Errorf("auto log = %q, %v", output, err)
 	}
 
 	// INI: *.ini 만 보이고, 읽고 쓸 수 있다. (하위 폴더 sub 와 notes.txt 는 빠진다)

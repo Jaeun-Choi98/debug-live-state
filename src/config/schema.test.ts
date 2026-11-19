@@ -1,4 +1,4 @@
-import { checkFilePattern, validateProcessConfig } from './schema';
+import { checkFilePattern, effectivePatterns, validateProcessConfig } from './schema';
 
 const valid = {
   pollIntervalMs: 5000,
@@ -74,4 +74,28 @@ test('file patterns follow the same rules as the Go server', () => {
   }
   expect(checkFilePattern('/opt/app/conf/*.ini', true)).toBe('');
   expect(checkFilePattern('/opt/app/conf/*', true)).not.toBe('');
+});
+
+test('file patterns default to the start script folder and resolve relative paths', () => {
+  expect(effectivePatterns({ startScript: '/opt/shelter/start.sh' }, 'log').patterns).toEqual([
+    '/opt/shelter/*.log',
+    '/opt/shelter/*/*.log',
+    '/opt/shelter/*/*/*.log',
+    '/opt/shelter/*/*/*/*.log',
+  ]);
+  expect(effectivePatterns({ startScript: '/opt/shelter/start.sh', iniFiles: ['conf/*.ini', '/etc/shelter/*.ini'] }, 'ini').patterns).toEqual([
+    '/opt/shelter/conf/*.ini',
+    '/etc/shelter/*.ini',
+  ]);
+  expect(effectivePatterns({}, 'log').problem).toBeTruthy();
+  expect(effectivePatterns({ startScript: '/opt/start.sh' }, 'log').problem).toBeTruthy();
+
+  const config = (process: object) => ({
+    groups: [{ slug: 'uw', name: '의왕' }],
+    servers: [{ id: 's', group: 'uw', host: 'h', user: 'u', hasPassword: true }],
+    processes: [{ id: 'p', server: 's', match: 'x', ...process }],
+  });
+  expect(validateProcessConfig(config({ startScript: '/opt/shelter/start.sh', logFiles: ['logs/*.log'] })).ok).toBe(true);
+  expect(validateProcessConfig(config({ logFiles: ['logs/*.log'] })).ok).toBe(false);
+  expect(validateProcessConfig(config({ startScript: '/opt/shelter/start.sh', logFiles: ['../etc/*.log'] })).ok).toBe(false);
 });

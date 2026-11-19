@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -42,13 +43,29 @@ func (r *remote) run(ctx context.Context, server Server, command string) (string
 
 // runInput 은 input 을 명령의 표준 입력으로 보낸다. (nil 이면 보내지 않는다)
 func (r *remote) runInput(ctx context.Context, server Server, command string, input []byte) (string, error) {
+	var stdout bytes.Buffer
+	if err := r.exec(ctx, server, command, input, &stdout); err != nil {
+		return "", err
+	}
+	return stdout.String(), nil
+}
+
+// stream 은 표준 출력을 메모리에 모으지 않고 w 로 바로 흘려보낸다. (큰 파일 내려받기)
+// 실패하면 w 에 이미 일부가 써졌을 수 있다.
+func (r *remote) stream(ctx context.Context, server Server, command string, w io.Writer) error {
+	return r.exec(ctx, server, command, nil, w)
+}
+
+// exec 는 server 에서 command 를 실행하고 표준 출력을 stdout 에 쓴다.
+// 종료 코드가 0 이 아니면 표준 에러 내용(없으면 표준 출력, 버퍼일 때만)을 담은 에러를 돌려준다.
+func (r *remote) exec(ctx context.Context, server Server, command string, input []byte, stdout io.Writer) error {
 	key := fmt.Sprintf("%s@%s|%x", server.User, server.addr(), sha256.Sum256([]byte(server.Password)))
 
 	var session *ssh.Session
 	for attempt := 0; ; attempt++ {
 		client, err := r.client(key, server)
 		if err != nil {
-			return "", err
+			return err
 		}
 		session, err = client.NewSession()
 		if err == nil {
@@ -57,13 +74,13 @@ func (r *remote) runInput(ctx context.Context, server Server, command string, in
 		// 서버 재시작 등으로 열어 둔 연결이 끊긴 경우: 버리고 한 번만 다시 연결한다.
 		r.drop(key, client)
 		if attempt > 0 {
-			return "", fmt.Errorf("ssh session: %w", err)
+			return fmt.Errorf("ssh session: %w", err)
 		}
 	}
 	defer session.Close()
 
-	var stdout, stderr bytes.Buffer
-	session.Stdout = &stdout
+	var stderr bytes.Buffer
+	session.Stdout = stdout
 	session.Stderr = &stderr
 	if input != nil {
 		session.Stdin = bytes.NewReader(input)
@@ -74,20 +91,20 @@ func (r *remote) runInput(ctx context.Context, server Server, command string, in
 
 	select {
 	case <-ctx.Done():
-		return "", fmt.Errorf("명령이 시간 안에 끝나지 않았습니다: %w", ctx.Err())
+		// 세션을 닫아 Run 을 끝내고 기다린다. (돌아간 뒤에도 stdout 에 쓰는 일이 없도록)
+		session.Close()
+		<-done
+		return fmt.Errorf("명령이 시간 안에 끝나지 않았습니다: %w", ctx.Err())
 	case err := <-done:
 		var exitErr *ssh.ExitError
 		if errors.As(err, &exitErr) {
 			detail := strings.TrimSpace(stderr.String())
-			if detail == "" {
-				detail = strings.TrimSpace(stdout.String())
+			if buffered, ok := stdout.(*bytes.Buffer); ok && detail == "" {
+				detail = strings.TrimSpace(buffered.String())
 			}
-			return "", fmt.Errorf("exit %d: %s", exitErr.ExitStatus(), detail)
+			return fmt.Errorf("exit %d: %s", exitErr.ExitStatus(), detail)
 		}
-		if err != nil {
-			return "", err
-		}
-		return stdout.String(), nil
+		return err
 	}
 }
 

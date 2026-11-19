@@ -5,6 +5,11 @@ import './ConfigEditor.css';
 
 interface ConfigEditorProps {
   config: ProcessConfig;
+  /**
+   * 'all' 이면 전체 편집. 그룹 slug 면 그 그룹 편집: 그룹 표 · 주기 설정 · 가져오기/내보내기를 숨기고,
+   * 그 그룹의 서버와 그 서버들의 프로세스만 보여준다. 다른 그룹의 행은 손대지 않고 그대로 저장한다.
+   */
+  scope: string;
   /** 실패하면 에러를 던진다. */
   onSave: (config: ProcessConfig) => Promise<void>;
   onClose: () => void;
@@ -58,16 +63,17 @@ const SECTIONS: { section: Section; title: string; description: string; columns:
     title: '프로세스',
     description:
       'match 는 화면에 보여줄 프로세스를 찾는 ps 명령줄 정규식입니다. 시작 스크립트는 셸 특수문자가 없는 절대 경로로 적습니다. ' +
-      '로그 · INI 파일은 이 패턴에 맞는 파일만 화면에서 열 수 있습니다. 여러 개는 쉼표로 나누고, * ? 는 폴더(/)를 넘지 않으며, 앞의 두 폴더는 와일드카드 없이 적습니다. ' +
+      '로그 · INI 파일은 비워 두면 시작 스크립트 폴더 아래의 *.log(4단계) · *.ini(3단계)를 찾습니다. ' +
+      '다른 곳을 보려면 패턴을 적습니다: 상대 경로(logs/*.log)는 시작 스크립트 폴더 기준, 절대 경로는 그대로. 여러 개는 쉼표로 나누고, * ? 는 폴더(/)를 넘지 않습니다. ' +
       '자동 재시작과 감시 문자열은 모니터링 화면의 각 프로세스 [감시] 에서 바꿉니다.',
     columns: [
       { field: 'id', title: 'id *' },
       { field: 'server', title: '서버 *', type: 'select' },
       { field: 'label', title: '표시 이름' },
       { field: 'match', title: 'match (정규식) *', placeholder: 'java .*app\\.jar', className: 'config-editor-col-wide' },
-      { field: 'logFiles', title: '로그 파일 패턴', placeholder: '/opt/app/logs/*.log, /opt/app/logs/*/*.log', className: 'config-editor-col-wide' },
-      { field: 'iniFiles', title: 'INI 파일 패턴', placeholder: '/opt/app/conf/*.ini', className: 'config-editor-col-wide' },
       { field: 'startScript', title: '시작 스크립트', placeholder: '/opt/app/start.sh', className: 'config-editor-col-wide' },
+      { field: 'logFiles', title: '로그 파일 (선택)', placeholder: '비우면 시작 스크립트 폴더의 *.log', className: 'config-editor-col-wide' },
+      { field: 'iniFiles', title: 'INI 파일 (선택)', placeholder: '비우면 시작 스크립트 폴더의 *.ini', className: 'config-editor-col-wide' },
     ],
   },
 ];
@@ -137,12 +143,19 @@ const toTiming = (config: ProcessConfig): Record<TimingField, string> => ({
   restartDelayMs: config.restartDelayMs?.toString() ?? '',
 });
 
-/** "servers[2].host: ..." → "서버 3번째 행 host: ..." */
-const toRowMessage = (message: string) =>
-  message.replace(/^(groups|servers|processes)\[(\d+)\]\.?/, (_, section: Section, i: string) => `${SECTION_TITLE[section]} ${Number(i) + 1}번째 행 `);
+/**
+ * "servers[2].host: ..." → "서버 3번째 행 host: ..."
+ * rowNumber 는 전체 배열의 위치를 화면에 보이는 행 번호로 바꾼다. (그룹 편집에서는 보이는 행만 센다, 안 보이면 null)
+ */
+const toRowMessage = (message: string, rowNumber: (section: Section, index: number) => number | null = (_, i) => i + 1) =>
+  message.replace(/^(groups|servers|processes)\[(\d+)\]\.?/, (_, section: Section, i: string) => {
+    const n = rowNumber(section, Number(i));
+    return n === null ? `${SECTION_TITLE[section]} (다른 그룹) ` : `${SECTION_TITLE[section]} ${n}번째 행 `;
+  });
 
 /** ⚙ 설정: 그룹 · 서버 · 프로세스를 추가 · 삭제 · 수정 · 정렬하고, JSON 파일로 가져오거나 내보내고, 서버에 저장한다. */
-const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) => {
+const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, scope, onSave, onClose }) => {
+  const groupMode = scope !== 'all';
   /** 위쪽 숫자 칸 (빈 칸이면 기본값) */
   const [timing, setTiming] = useState(() => toTiming(config));
   /**
@@ -214,10 +227,19 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) 
   );
   const inputClass = (field: string) =>
     `input config-editor-input${invalidFields.has(field) ? ' config-editor-input-invalid' : ''}`;
+  // 그룹 편집에서 보이는 행: 그 그룹의 서버, 다른 그룹 서버에 속하지 않은 프로세스. (전체 편집에서는 모두)
+  const otherGroupServerIds = new Set(groupMode ? rows.servers.filter(r => r.group !== scope).map(r => r.id.trim()) : []);
+  const isVisible = (section: Section, row: Row) =>
+    !groupMode || (section === 'servers' ? row.group === scope : section === 'processes' ? !otherGroupServerIds.has(row.server) : false);
+  /** 전체 배열 위치 → 화면 행 번호 (보이지 않으면 null) */
+  const rowNumber = (section: Section, index: number) =>
+    rows[section][index] && isVisible(section, rows[section][index]) ? rows[section].slice(0, index + 1).filter(r => isVisible(section, r)).length : null;
+
   const selectOptions: Record<string, string[]> = {
     group: rows.groups.map(r => r.slug.trim()).filter(Boolean),
-    server: rows.servers.map(r => r.id.trim()).filter(Boolean),
+    server: rows.servers.filter(r => isVisible('servers', r)).map(r => r.id.trim()).filter(Boolean),
   };
+  const groupName = rows.groups.find(g => g.slug === scope)?.name || scope;
 
   useEffect(() => {
     const closeOnEscape = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -234,6 +256,13 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) 
       [next[from], next[to]] = [next[to], next[from]];
       return { ...prev, [section]: next };
     });
+  /** index 위(-1) · 아래(+1)에서 가장 가까운 보이는 행의 위치 (없으면 -1). 그룹 편집에서는 가려진 다른 그룹 행을 건너뛴다. */
+  const neighbor = (section: Section, index: number, step: -1 | 1) => {
+    for (let i = index + step; i >= 0 && i < rows[section].length; i += step) {
+      if (isVisible(section, rows[section][i])) return i;
+    }
+    return -1;
+  };
 
   const addRow = (section: Section) =>
     setRows(prev => {
@@ -246,10 +275,10 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) 
 
       const empty: Record<Section, Record<string, string>> = {
         groups: { slug: `${prefix}-${n}`, name: '' },
-        servers: { id: `${prefix}-${n}`, group: prev.groups[0]?.slug ?? '', label: '', host: '', port: '', user: '', password: '' },
+        servers: { id: `${prefix}-${n}`, group: groupMode ? scope : prev.groups[0]?.slug ?? '', label: '', host: '', port: '', user: '', password: '' },
         processes: {
           id: `${prefix}-${n}`,
-          server: prev.servers[0]?.id ?? '',
+          server: prev.servers.find(r => !groupMode || r.group === scope)?.id ?? '',
           label: '',
           match: '',
           logFiles: '',
@@ -280,7 +309,7 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) 
       blocking = [`JSON 형식이 아닙니다: ${err instanceof Error ? err.message : String(err)}`];
     }
     if (blocking.length > 0) {
-      setMessage({ kind: 'error', text: `가져오지 못했습니다 (${selected.name}):\n${blocking.map(toRowMessage).join('\n')}` });
+      setMessage({ kind: 'error', text: `가져오지 못했습니다 (${selected.name}):\n${blocking.map(error => toRowMessage(error)).join('\n')}` });
       return;
     }
     const next = imported as ProcessConfig;
@@ -325,20 +354,25 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) 
     <div className="config-editor-backdrop" onMouseDown={e => e.target === e.currentTarget && onClose()}>
       <div className="config-editor" role="dialog" aria-modal="true" aria-label="설정 편집">
         <header className="config-editor-header">
-          <h2 className="config-editor-title">설정 편집</h2>
+          <h2 className="config-editor-title">설정 편집{groupMode && ` — ${groupName}`}</h2>
           <div className="config-editor-header-actions">
-            <input ref={importInputRef} type="file" accept=".json,application/json" hidden onChange={handleImport} />
-            <button className="btn btn-secondary" onClick={() => importInputRef.current?.click()}>
-              가져오기
-            </button>
-            <button
-              className="btn btn-secondary"
-              onClick={handleExport}
-              disabled={!validation.ok}
-              title="편집 중인 내용을 processes.json 으로 내려받습니다 (비밀번호 제외)"
-            >
-              내보내기
-            </button>
+            {/* 가져오기 · 내보내기는 설정 전체를 다루므로 전체(/all) 편집에서만 */}
+            {!groupMode && (
+              <>
+                <input ref={importInputRef} type="file" accept=".json,application/json" hidden onChange={handleImport} />
+                <button className="btn btn-secondary" onClick={() => importInputRef.current?.click()}>
+                  가져오기
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  onClick={handleExport}
+                  disabled={!validation.ok}
+                  title="편집 중인 내용을 processes.json 으로 내려받습니다 (비밀번호 제외)"
+                >
+                  내보내기
+                </button>
+              </>
+            )}
             <button className="btn-icon" onClick={onClose} title="닫기 (Esc)">
               ✕
             </button>
@@ -346,81 +380,95 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) 
         </header>
 
         <div className="config-editor-body">
-          <div className="config-editor-defaults">
-            {TIMING_FIELDS.map(({ field, title, fallback, help }) => (
-              <label key={field} className="config-editor-default" title={`${help} (비우면 ${fallback})`}>
-                {title}
-                <input
-                  className={inputClass(field)}
-                  type="number"
-                  min={1000}
-                  step={1000}
-                  placeholder={String(fallback)}
-                  value={timing[field]}
-                  onChange={e => setTiming(prev => ({ ...prev, [field]: e.target.value }))}
-                />
-              </label>
-            ))}
-          </div>
+          {groupMode && (
+            <p className="config-editor-scope">
+              {groupName} 그룹의 서버 · 프로세스만 편집합니다. 그룹 · 확인 주기 · 가져오기/내보내기는 전체 화면(/all)의 설정에서 바꿉니다.
+            </p>
+          )}
+          {!groupMode && (
+            <div className="config-editor-defaults">
+              {TIMING_FIELDS.map(({ field, title, fallback, help }) => (
+                <label key={field} className="config-editor-default" title={`${help} (비우면 ${fallback})`}>
+                  {title}
+                  <input
+                    className={inputClass(field)}
+                    type="number"
+                    min={1000}
+                    step={1000}
+                    placeholder={String(fallback)}
+                    value={timing[field]}
+                    onChange={e => setTiming(prev => ({ ...prev, [field]: e.target.value }))}
+                  />
+                </label>
+              ))}
+            </div>
+          )}
 
-          {SECTIONS.map(({ section, title, description, columns }) => (
-            <section key={section} className="config-editor-section">
-              <h3 className="config-editor-section-title">{title}</h3>
-              <p className="config-editor-section-description">{description}</p>
+          {SECTIONS.filter(({ section }) => !groupMode || section !== 'groups').map(({ section, title, description, columns: allColumns }) => {
+            // 그룹 편집에서는 서버의 그룹을 바꿀 수 없다. (새 서버는 이 그룹으로 만든다)
+            const columns = groupMode ? allColumns.filter(column => column.field !== 'group') : allColumns;
+            return (
+              <section key={section} className="config-editor-section">
+                <h3 className="config-editor-section-title">{title}</h3>
+                <p className="config-editor-section-description">{description}</p>
 
-              <table className="config-editor-table">
-                <thead>
-                  <tr>
-                    <th className="config-editor-col-order">순서</th>
-                    {columns.map(column => (
-                      <th key={column.field} className={column.className}>
-                        {column.title}
-                      </th>
-                    ))}
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows[section].map((row, i) => (
-                    <tr key={row.key}>
-                      <td className="config-editor-col-order">
-                        <button className="btn-icon" onClick={() => moveRow(section, i, i - 1)} disabled={i === 0} title="위로">
-                          ▲
-                        </button>
-                        <button className="btn-icon" onClick={() => moveRow(section, i, i + 1)} disabled={i === rows[section].length - 1} title="아래로">
-                          ▼
-                        </button>
-                      </td>
-                      {columns.map(({ field, type, placeholder, className }) => {
-                        const fieldClass = inputClass(`${section}.${i}.${field}`);
-                        const onChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
-                          updateRow(section, row.key, field, e.target.value);
-                        return (
-                          <td key={field} className={className}>
-                            {type === 'select' ? (
-                              <select className={fieldClass} value={row[field]} onChange={onChange}>
-                                {!selectOptions[field].includes(row[field]) && <option value={row[field]}>{row[field] || '선택'}</option>}
-                                {selectOptions[field].map(option => (
-                                  <option key={option} value={option}>
-                                    {option}
-                                  </option>
-                                ))}
-                              </select>
-                            ) : (
-                              <input
-                                className={fieldClass}
-                                type={type ?? 'text'}
-                                autoComplete={type === 'password' ? 'new-password' : 'off'}
-                                placeholder={
-                                  type === 'password' ? (keepsPassword(row) ? '저장됨 (바꿀 때만 입력)' : '입력 필요')
-                                  : field === 'label' ? row.id
-                                  : placeholder
-                                }
-                                value={row[field]}
-                                onChange={onChange}
-                              />
-                            )}
+                <table className="config-editor-table">
+                  <thead>
+                    <tr>
+                      <th className="config-editor-col-order">순서</th>
+                      {columns.map(column => (
+                        <th key={column.field} className={column.className}>
+                          {column.title}
+                        </th>
+                      ))}
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows[section].map((row, i) => {
+                      if (!isVisible(section, row)) return null;
+                      const above = neighbor(section, i, -1);
+                      const below = neighbor(section, i, 1);
+                      return (
+                        <tr key={row.key}>
+                          <td className="config-editor-col-order">
+                            <button className="btn-icon" onClick={() => moveRow(section, i, above)} disabled={above < 0} title="위로">
+                              ▲
+                            </button>
+                            <button className="btn-icon" onClick={() => moveRow(section, i, below)} disabled={below < 0} title="아래로">
+                              ▼
+                            </button>
                           </td>
+                          {columns.map(({ field, type, placeholder, className }) => {
+                            const fieldClass = inputClass(`${section}.${i}.${field}`);
+                            const onChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+                              updateRow(section, row.key, field, e.target.value);
+                            return (
+                              <td key={field} className={className}>
+                                {type === 'select' ? (
+                                  <select className={fieldClass} value={row[field]} onChange={onChange}>
+                                    {!selectOptions[field].includes(row[field]) && <option value={row[field]}>{row[field] || '선택'}</option>}
+                                    {selectOptions[field].map(option => (
+                                      <option key={option} value={option}>
+                                        {option}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ) : (
+                                  <input
+                                    className={fieldClass}
+                                    type={type ?? 'text'}
+                                    autoComplete={type === 'password' ? 'new-password' : 'off'}
+                                    placeholder={
+                                      type === 'password' ? (keepsPassword(row) ? '저장됨 (바꿀 때만 입력)' : '입력 필요')
+                                      : field === 'label' ? row.id
+                                      : placeholder
+                                    }
+                                    value={row[field]}
+                                    onChange={onChange}
+                                  />
+                                )}
+                              </td>
                         );
                       })}
                       <td>
@@ -433,7 +481,8 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) 
                         </button>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
 
@@ -441,7 +490,8 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) 
                 + {title} 추가
               </button>
             </section>
-          ))}
+            );
+          })}
         </div>
 
         <footer className="config-editor-footer">
@@ -449,7 +499,7 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) 
             {errors.length > 0 && (
               <ul className="config-editor-errors">
                 {errors.map(error => (
-                  <li key={error}>{toRowMessage(error)}</li>
+                  <li key={error}>{toRowMessage(error, rowNumber)}</li>
                 ))}
               </ul>
             )}

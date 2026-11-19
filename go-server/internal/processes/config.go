@@ -59,9 +59,11 @@ type Process struct {
 	Label  string `json:"label,omitempty"`
 	// ps 의 명령줄(args)에 대한 정규식. 일치하는 프로세스를 이 항목의 실행 인스턴스로 본다.
 	Match string `json:"match"`
-	// 로그 파일 패턴 (예: /opt/app/logs/*.log). 화면에는 이 패턴에 맞는 파일만 보이고, tail 로 끝부분을 읽는다.
+	// 로그 파일 패턴 (선택). 비워 두면 시작 스크립트 폴더 아래 4단계까지의 *.log 를 찾는다. (EffectivePatterns)
+	// 상대 경로(logs/*.log)는 시작 스크립트 폴더 기준, 절대 경로(/var/log/app/*.log)는 그대로 쓴다.
+	// 화면에는 이 패턴에 맞는 파일만 보이고, tail 로 끝부분을 읽는다.
 	LogFiles []string `json:"logFiles,omitempty"`
-	// INI 파일 패턴 (예: /opt/app/conf/*.ini). 화면에는 이 패턴에 맞는 파일만 보이고, 통째로 읽고 고친다.
+	// INI 파일 패턴 (선택). 비워 두면 시작 스크립트 폴더 아래 3단계까지의 *.ini 를 찾는다. 규칙은 LogFiles 와 같다.
 	IniFiles []string `json:"iniFiles,omitempty"`
 	// 시작 · 재시작 때 실행할 스크립트의 절대 경로 (인자 없이 실행)
 	StartScript string `json:"startScript,omitempty"`
@@ -185,7 +187,11 @@ func (c *Config) Validate() error {
 				add("%s.%s: 패턴은 %d개까지 적을 수 있습니다", at, field, maxFilePatterns)
 			}
 			for _, pattern := range patterns {
-				if problem := checkFilePattern(pattern, field == "iniFiles"); problem != "" {
+				resolved, problem := resolvePattern(p.StartScript, pattern)
+				if problem == "" {
+					problem = checkFilePattern(resolved, field == "iniFiles")
+				}
+				if problem != "" {
 					add("%s.%s: %s: %s", at, field, pattern, problem)
 				}
 			}
@@ -266,6 +272,61 @@ func checkFilePattern(pattern string, ini bool) string {
 		return ".ini 로 끝나야 합니다"
 	}
 	return ""
+}
+
+// 패턴을 비워 두었을 때 시작 스크립트 폴더 아래에서 찾는 깊이 (폴더 바로 아래 포함)
+// 로그는 날짜 · 종류별 폴더가 겹쳐 있는 경우가 많아 한 단계 더 찾는다. (logs/2026/11/app.log)
+var defaultPatternDepth = map[string]int{RootLog: 4, RootINI: 3}
+
+// EffectivePatterns 는 실제로 쓰는 로그 · INI 파일 패턴(절대 경로)이다.
+//
+//	적어 둔 패턴이 있으면: 상대 경로는 시작 스크립트 폴더 기준으로 바꾸고, 절대 경로는 그대로.
+//	비워 두었으면: 시작 스크립트 폴더의 *.ext, */*.ext ... (로그 4단계, INI 3단계. 예: /opt/shelter/start.sh → /opt/shelter/*.log ...)
+//
+// 쓸 수 있는 패턴이 없으면 이유를 함께 돌려준다. (시작 스크립트가 없음, 폴더가 너무 얕음 등)
+func (p Process) EffectivePatterns(root string) ([]string, string) {
+	explicit, ext := p.LogFiles, ".log"
+	if root == RootINI {
+		explicit, ext = p.IniFiles, ".ini"
+	}
+	if len(explicit) == 0 {
+		if p.StartScript == "" {
+			return nil, "시작 스크립트가 등록되지 않아 " + ext + " 파일을 찾을 폴더가 없습니다 (⚙ 설정에서 시작 스크립트나 패턴을 적어 주세요)"
+		}
+		base := path.Dir(p.StartScript)
+		var patterns []string
+		for depth, wildcards := 0, ""; depth < defaultPatternDepth[root]; depth, wildcards = depth+1, wildcards+"*/" {
+			patterns = append(patterns, base+"/"+wildcards+"*"+ext)
+		}
+		// 시작 스크립트가 /opt/start.sh 처럼 얕은 곳에 있으면 /opt 아래 전체를 훑게 되므로 자동으로 찾지 않는다.
+		if problem := checkFilePattern(patterns[0], root == RootINI); problem != "" {
+			return nil, fmt.Sprintf("시작 스크립트 폴더(%s)가 너무 얕아 자동으로 찾지 않습니다 (⚙ 설정에서 패턴을 적어 주세요)", base)
+		}
+		return patterns, ""
+	}
+	patterns := make([]string, 0, len(explicit))
+	for _, pattern := range explicit {
+		resolved, problem := resolvePattern(p.StartScript, pattern)
+		if problem != "" {
+			return nil, problem
+		}
+		patterns = append(patterns, resolved)
+	}
+	return patterns, ""
+}
+
+// resolvePattern 은 상대 경로 패턴을 시작 스크립트 폴더 기준 절대 경로로 바꾼다. 절대 경로는 그대로 돌려준다.
+func resolvePattern(startScript, pattern string) (string, string) {
+	if strings.HasPrefix(pattern, "/") {
+		return pattern, ""
+	}
+	if startScript == "" {
+		return "", "상대 경로는 시작 스크립트 폴더 기준이므로 시작 스크립트가 필요합니다"
+	}
+	if pattern == "" || path.Clean(pattern) != pattern || pattern == ".." || strings.HasPrefix(pattern, "../") {
+		return "", "시작 스크립트 폴더 밖을 가리키거나 올바르지 않은 경로입니다"
+	}
+	return path.Dir(startScript) + "/" + pattern, ""
 }
 
 // matchesAny 는 file 이 패턴 중 하나에 맞는지다. (* ? 는 / 를 넘지 않는다. 셸 glob 과 같다)

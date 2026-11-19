@@ -23,6 +23,7 @@
 | 상태 확인 | `LC_ALL=C ps -eo pid=,pcpu=,pmem=,etime=,args=` (서버마다 2초에 최대 1번, 여러 사람이 봐도 공유) |
 | 로그 · INI 파일 목록 | `LC_ALL=C ls -lndt -- <패턴 ...>` (패턴은 셸이 펼침, 최대 1000개) |
 | 로그 | `tail -n <줄 수> -- '<파일>'` |
+| 로그 전체 내려받기 | `wc -c` 로 크기를 잰 뒤 `head -c <크기> -- '<파일>'` (출력을 그대로 흘려보냄, 최대 30분) |
 | INI 읽기 | `wc -c` 로 1MB 이하인지 본 뒤 `cat -- '<파일>'` |
 | INI 쓰기 | 받은 내용을 `<파일>.pm-new` 에 쓰고 크기가 맞는지 확인 → `cp -p` 로 `<파일>.bak` 백업 → `cat <파일>.pm-new > <파일>` (권한 · 소유자 유지) → 임시 파일 삭제 |
 | 중지 | `kill -TERM <PID ...>` (PID 는 ps 결과에서 match 정규식으로 찾은 값) |
@@ -68,7 +69,7 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
   ],
   "processes": [
     { "id": "shelter", "server": "uw-app1", "label": "Shelter", "match": "java .*shelter\\.jar",
-      "logFiles": ["/opt/shelter/logs/*.log"], "iniFiles": ["/opt/shelter/conf/*.ini"], "startScript": "/opt/shelter/start.sh",
+      "startScript": "/opt/shelter/start.sh", "logFiles": ["logs/*.log", "/var/log/shelter/*.log"],
       "autoRestart": true, "watchName": "java", "watchArgs": "/opt/shelter/shelter.jar" }
   ]
 }
@@ -94,8 +95,8 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 | processes[].server | O | 서버 id |
 | processes[].label | | 표시 이름 (없으면 id) |
 | processes[].match | O | ps 명령줄(args)에 대한 정규식 (Go RE2 문법) |
-| processes[].logFiles | | 로그 파일 패턴 목록 (최대 10개). 영문 · 숫자 · `. _ - /` 와 `* ?`. `* ?` 는 `/` 를 넘지 않고 `**` 는 금지, 앞의 두 폴더는 와일드카드 없이 |
-| processes[].iniFiles | | INI 파일 패턴 목록. 규칙은 logFiles 와 같고 `.ini` 로 끝나야 합니다 |
+| processes[].logFiles | | 로그 파일 패턴 목록 (선택, 최대 10개). **비우면 시작 스크립트 폴더의 `*.log`, `*/*.log`, `*/*/*.log`, `*/*/*/*.log`**. 상대 경로는 시작 스크립트 폴더 기준(`..` 금지), 절대 경로는 그대로. 영문 · 숫자 · `. _ - /` 와 `* ?`. `* ?` 는 `/` 를 넘지 않고 `**` 는 금지, 펼친 경로의 앞 두 폴더는 와일드카드 없이 |
+| processes[].iniFiles | | INI 파일 패턴 목록 (선택). 비우면 시작 스크립트 폴더 아래 3단계까지의 `*.ini`. 규칙은 logFiles 와 같고 `.ini` 로 끝나야 합니다 |
 | processes[].startScript | | 시작 스크립트 절대 경로 (영문 · 숫자 · `. _ - /`) |
 | processes[].autoRestart | | `true` 면 자동 재시작. `startScript` 와, `watchName` · `watchArgs` 중 하나 이상 필요 |
 | processes[].watchName | | 감시 프로세스의 실행 파일 이름 (경로 · 공백 없이, 정확히 일치) |
@@ -144,7 +145,8 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 
 ### GET /api/processes/:id/files?root=log
 
-`root`(`log` 로그 파일 패턴, 기본값 · `ini` INI 파일 패턴)에 등록한 패턴에 맞는 파일 목록입니다. 최근 수정 순이며, 폴더는 보여주지 않습니다.
+`root`(`log` 로그 파일, 기본값 · `ini` INI 파일)의 패턴에 맞는 파일 목록입니다. 최근 수정 순이며, 폴더는 보여주지 않습니다.
+`patterns` 는 실제로 쓴 절대 경로 패턴입니다. (비워 두었으면 시작 스크립트 폴더 기준 기본 패턴, 상대 경로는 펼친 결과)
 
 ```json
 {
@@ -164,7 +166,7 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 
 | 상태 코드 | 의미 |
 |---|---|
-| `400` | 패턴이 등록되지 않음, 알 수 없는 `root` |
+| `400` | 쓸 패턴이 없음(시작 스크립트도 패턴도 없음, 시작 스크립트 폴더가 너무 얕음), 알 수 없는 `root` |
 | `404` | 없는 프로세스 |
 | `502` | SSH 실패 |
 
@@ -177,6 +179,21 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 | `400` | 패턴이 등록되지 않음, `path` 없음, 패턴에 맞지 않거나 `..` · 작은따옴표 · 제어 문자가 들어간 경로 |
 | `404` | 없는 프로세스 |
 | `502` | SSH 실패 또는 tail 실패 (파일 없음 · 권한 없음 등, 서버의 오류 문구 포함) |
+
+### GET /api/processes/:id/log/download?path=/opt/shelter/logs/app.log
+
+로그 파일 패턴에 맞는 파일 전체를 첨부 파일로 내려받습니다. (`Content-Disposition: attachment`)
+
+- 시작할 때 잰 크기만큼만 보내고 `Content-Length` 로 알려줍니다. (받는 동안 로그가 늘어나도 길이가 맞도록)
+- Go 서버는 파일을 메모리에 모으지 않고 SSH 출력을 그대로 흘려보냅니다. 브라우저에서 취소하면 서버 쪽 명령도 멈춥니다.
+- 화면의 **⤓ 화면 내용**은 이 API 를 쓰지 않고, 화면에 보이는 줄로 브라우저에서 바로 파일을 만듭니다.
+- 보내기 시작한 뒤 실패하면 상태 코드를 바꿀 수 없어 브라우저에는 내려받기 실패로 보입니다. (Go 서버 로그에 남습니다)
+
+| 상태 코드 | 의미 |
+|---|---|
+| `400` | 패턴이 등록되지 않음, 패턴에 맞지 않는 경로 |
+| `404` | 없는 프로세스 |
+| `502` | SSH 실패, 파일 없음 · 권한 없음 |
 
 ### GET /api/processes/:id/ini?path=/opt/shelter/conf/app.ini
 
@@ -249,7 +266,7 @@ Go 서버의 로그 레벨을 조회(`GET /log-config`)하거나 바꿉니다(`G
 | 경로 | 내용 |
 |---|---|
 | `/` | `/all` 로 이동 |
-| `/all`, `/<그룹 slug>` 등 확장자 없는 경로 | 화면(`index.html`) |
+| `/all`, `/<그룹 slug>` 등 확장자 없는 경로 | 화면(`index.html`). 그룹 주소에서는 상단 탭 · ⚙ 설정이 그 그룹만 다룹니다 |
 | `/config/README.md` | 화면 위 소개 · 사용 방법 |
 | `/config/API.md` | 이 문서 |
 

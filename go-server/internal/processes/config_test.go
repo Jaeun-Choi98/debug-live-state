@@ -300,3 +300,51 @@ func TestSaveRejectsStaleVersion(t *testing.T) {
 		t.Errorf("save with latest version: %v", err)
 	}
 }
+
+func TestEffectivePatterns(t *testing.T) {
+	check := func(p Process, root string, want string, wantProblem bool) {
+		t.Helper()
+		got, problem := p.EffectivePatterns(root)
+		if fmt.Sprint(got) != want || (problem != "") != wantProblem {
+			t.Errorf("%+v %s = %v, %q; want %s (problem %v)", p, root, got, problem, want, wantProblem)
+		}
+	}
+	app := Process{StartScript: "/opt/shelter/start.sh"}
+	check(app, RootLog, "[/opt/shelter/*.log /opt/shelter/*/*.log /opt/shelter/*/*/*.log /opt/shelter/*/*/*/*.log]", false)
+	check(app, RootINI, "[/opt/shelter/*.ini /opt/shelter/*/*.ini /opt/shelter/*/*/*.ini]", false)
+
+	// 적어 둔 패턴: 상대 경로는 시작 스크립트 폴더 기준, 절대 경로는 그대로
+	app.LogFiles = []string{"logs/*.log", "/var/log/shelter/*.log"}
+	check(app, RootLog, "[/opt/shelter/logs/*.log /var/log/shelter/*.log]", false)
+
+	// 시작 스크립트가 없거나, 폴더가 너무 얕으면 자동으로 찾지 않는다.
+	check(Process{}, RootLog, "[]", true)
+	check(Process{StartScript: "/opt/start.sh"}, RootLog, "[]", true)
+	check(Process{LogFiles: []string{"logs/*.log"}}, RootLog, "[]", true)
+}
+
+func TestValidateRelativePatterns(t *testing.T) {
+	base := func(p Process) Config {
+		p.ID, p.Server, p.Match = "p", "s", "x"
+		return Config{
+			Groups:    []Group{{Slug: "uw", Name: "의왕"}},
+			Servers:   []Server{{ID: "s", Group: "uw", Host: "h", User: "u", Password: "pw"}},
+			Processes: []Process{p},
+		}
+	}
+	ok := base(Process{StartScript: "/opt/shelter/start.sh", LogFiles: []string{"logs/*.log"}, IniFiles: []string{"conf/*.ini"}})
+	if err := ok.Validate(); err != nil {
+		t.Errorf("relative patterns: %v", err)
+	}
+	for _, bad := range []Process{
+		{LogFiles: []string{"logs/*.log"}},                                         // 시작 스크립트 없음
+		{StartScript: "/opt/shelter/start.sh", LogFiles: []string{"../etc/*.log"}}, // 폴더 밖
+		{StartScript: "/opt/start.sh", LogFiles: []string{"*.log"}},                // /opt/*.log: 너무 얕음
+		{StartScript: "/opt/shelter/start.sh", IniFiles: []string{"conf/*"}},       // .ini 아님
+	} {
+		c := base(bad)
+		if err := c.Validate(); err == nil {
+			t.Errorf("%+v should be rejected", bad)
+		}
+	}
+}

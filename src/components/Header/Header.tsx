@@ -9,13 +9,20 @@ interface HeaderProps {
   navigate: (to: string) => void;
 }
 
-/** 상단 바: 그룹 탭(/all, /uw ...)으로 화면을 바꾼다. */
+/**
+ * 상단 바: 그룹 탭으로 화면을 바꾼다.
+ *   /all          전체 + 모든 그룹 탭
+ *   /uw (그룹)    그 그룹 탭만 (다른 그룹으로 가는 탭을 보여주지 않는다. 로고도 그 그룹으로 간다)
+ *   없는 그룹     전체 + 모든 그룹 탭 (돌아갈 곳을 고를 수 있게)
+ */
 const Header: React.FC<HeaderProps> = ({ groups, currentSlug, navigate }) => {
-  const tabs = [{ slug: 'all', name: '전체' }, ...groups];
+  const currentGroup = groups.find(g => g.slug === currentSlug);
+  const tabs = currentGroup ? [currentGroup] : [{ slug: 'all', name: '전체' }, ...groups];
+  const home = currentGroup ? `/${currentGroup.slug}` : '/all';
 
   return (
     <nav className="navbar">
-      <a className="navbar-brand" href="/all" onClick={e => { e.preventDefault(); navigate('/all'); }}>
+      <a className="navbar-brand" href={home} onClick={e => { e.preventDefault(); navigate(home); }}>
         <span className="navbar-brand-icon">&#9678;</span>
         Process Management
       </a>

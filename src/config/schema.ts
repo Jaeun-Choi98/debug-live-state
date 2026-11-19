@@ -9,6 +9,53 @@ export const RESERVED_SLUGS = ['all', 'api', 'config', 'static', 'log-config'];
 
 const MAX_FILE_PATTERNS = 10;
 
+/** 패턴을 비워 두었을 때 시작 스크립트 폴더 아래에서 찾는 깊이 (Go 서버의 defaultPatternDepth). 로그는 한 단계 더 */
+const DEFAULT_PATTERN_DEPTH = { log: 4, ini: 3 };
+
+const dirname = (file: string) => file.slice(0, file.lastIndexOf('/')) || '/';
+
+/** 상대 경로 패턴을 시작 스크립트 폴더 기준 절대 경로로 바꾼다. (Go 서버의 resolvePattern) */
+function resolvePattern(startScript: string | undefined, pattern: unknown): { pattern: string } | { problem: string } {
+  if (typeof pattern !== 'string') return { problem: '문자열이어야 합니다' };
+  if (pattern.startsWith('/')) return { pattern };
+  if (!startScript) return { problem: '상대 경로는 시작 스크립트 폴더 기준이므로 시작 스크립트가 필요합니다' };
+  if (pattern === '' || pattern === '..' || pattern.startsWith('../') || /(^|\/)\.\.?(\/|$)|\/\/|\/$/.test(pattern)) {
+    return { problem: '시작 스크립트 폴더 밖을 가리키거나 올바르지 않은 경로입니다' };
+  }
+  return { pattern: `${dirname(startScript)}/${pattern}` };
+}
+
+/**
+ * 실제로 쓰는 로그 · INI 파일 패턴(절대 경로)과, 없으면 그 이유. (Go 서버의 Process.EffectivePatterns)
+ *   적어 둔 패턴이 있으면: 상대 경로는 시작 스크립트 폴더 기준, 절대 경로는 그대로
+ *   비워 두었으면: 시작 스크립트 폴더 아래 *.log(4단계) / *.ini(3단계)
+ */
+export function effectivePatterns(
+  process: { startScript?: string; logFiles?: string[]; iniFiles?: string[] },
+  root: 'log' | 'ini'
+): { patterns: string[]; problem?: string } {
+  const ext = root === 'ini' ? '.ini' : '.log';
+  const explicit = root === 'ini' ? process.iniFiles : process.logFiles;
+  if (!explicit || explicit.length === 0) {
+    if (!process.startScript) {
+      return { patterns: [], problem: `시작 스크립트가 등록되지 않아 ${ext} 파일을 찾을 폴더가 없습니다 (⚙ 설정에서 시작 스크립트나 패턴을 적어 주세요)` };
+    }
+    const base = dirname(process.startScript);
+    const patterns = Array.from({ length: DEFAULT_PATTERN_DEPTH[root] }, (_, depth) => `${base}/${'*/'.repeat(depth)}*${ext}`);
+    if (checkFilePattern(patterns[0], root === 'ini')) {
+      return { patterns: [], problem: `시작 스크립트 폴더(${base})가 너무 얕아 자동으로 찾지 않습니다 (⚙ 설정에서 패턴을 적어 주세요)` };
+    }
+    return { patterns };
+  }
+  const patterns: string[] = [];
+  for (const pattern of explicit) {
+    const resolved = resolvePattern(process.startScript, pattern);
+    if ('problem' in resolved) return { patterns: [], problem: resolved.problem };
+    patterns.push(resolved.pattern);
+  }
+  return { patterns };
+}
+
 // 로그 · INI 파일 패턴의 문제를 돌려준다. (문제가 없으면 '') Go 서버의 checkFilePattern 과 같은 규칙이다.
 //
 //   허용: /opt/app/logs/*.log, /opt/app/logs/*, /opt/app/logs/*/*.log, /opt/app/conf/app.ini
@@ -124,7 +171,9 @@ export function validateProcessConfig(raw: unknown): ValidationResult {
       }
       if (patterns.length > MAX_FILE_PATTERNS) errors.push(`${at}.${field}: 패턴은 ${MAX_FILE_PATTERNS}개까지 적을 수 있습니다`);
       for (const pattern of patterns) {
-        const problem = checkFilePattern(pattern, field === 'iniFiles');
+        const startScript = typeof process.startScript === 'string' ? process.startScript : undefined;
+        const resolved = resolvePattern(startScript, pattern);
+        const problem = 'problem' in resolved ? resolved.problem : checkFilePattern(resolved.pattern, field === 'iniFiles');
         if (problem) errors.push(`${at}.${field}: ${pattern}: ${problem}`);
       }
     }

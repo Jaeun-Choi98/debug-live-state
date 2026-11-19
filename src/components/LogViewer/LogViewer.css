@@ -209,3 +209,15 @@
 .log-viewer-file-dir {
   color: var(--text-muted);
 }
+
+/* 내보내기 버튼 (화면 내용 · 전체 파일) */
+.log-viewer-export {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.log-viewer-export a.btn {
+  display: inline-block;
+  color: inherit;
+  text-decoration: none;
+}

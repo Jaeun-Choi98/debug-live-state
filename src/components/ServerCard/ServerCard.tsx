@@ -3,6 +3,7 @@ import { ProcessEntry, ServerEntry, ServerStatus, WatchStatus } from '../../conf
 import { ServerState } from '../StatusSidebar/StatusSidebar';
 import { FileRoot } from '../LogViewer/LogViewer';
 import { requestApi } from '../../hooks/useProcessConfig';
+import { effectivePatterns } from '../../config/schema';
 import './ServerCard.css';
 
 interface ServerCardProps {
@@ -115,6 +116,9 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, stat
                 const state = !known ? 'idle' : running ? 'ok' : 'error';
                 const action = busy[process.id];
                 const badge = known ? autoRestartBadge(process, processStatus?.watch) : null;
+              // 로그 · INI 버튼: 실제로 쓰는 패턴(비워 두면 시작 스크립트 폴더 기준)을 마우스를 올리면 보여준다.
+              const logPatterns = effectivePatterns(process, 'log');
+              const iniPatterns = effectivePatterns(process, 'ini');
 
                 return (
                   <tr key={process.id} className={`server-card-row-${state}`}>
@@ -148,14 +152,14 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, stat
                           <span className="server-card-busy">{ACTION_TEXT[action]} 중...</span>
                         ) : (
                           <>
-                            <button className="btn-text" onClick={() => onOpenFiles(process, 'log')} disabled={!process.logFiles?.length} title={process.logFiles?.join('\n') || '로그 파일 패턴이 등록되지 않았습니다'}>
+                            <button className="btn-text" onClick={() => onOpenFiles(process, 'log')} disabled={logPatterns.patterns.length === 0} title={logPatterns.problem ?? logPatterns.patterns.join('\n')}>
                               로그
                             </button>
                             <button
                               className="btn-text"
                               onClick={() => onOpenFiles(process, 'ini')}
-                              disabled={!process.iniFiles?.length}
-                              title={process.iniFiles?.join('\n') || 'INI 파일 패턴이 등록되지 않았습니다'}
+                              disabled={iniPatterns.patterns.length === 0}
+                              title={iniPatterns.problem ?? iniPatterns.patterns.join('\n')}
                             >
                               INI
                             </button>
