@@ -94,3 +94,108 @@
   border: 1px solid var(--border);
   border-radius: 6px;
 }
+
+.log-viewer-pathbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px 0;
+  font-size: 0.8rem;
+}
+
+.log-viewer-pathbar-refresh {
+  margin-left: auto;
+}
+
+.log-viewer-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.log-viewer-crumbs strong {
+  color: var(--text);
+}
+
+.log-viewer-files {
+  flex: 1;
+  min-height: 0;
+  margin: 10px 16px 16px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.log-viewer-placeholder {
+  padding: 16px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.log-viewer-file-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.log-viewer-file-table th {
+  position: sticky;
+  top: 0;
+  padding: 8px 12px;
+  font-weight: 600;
+  text-align: left;
+  color: var(--text-muted);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.log-viewer-file-table td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.log-viewer-file-table tr:last-child td {
+  border-bottom: none;
+}
+
+.log-viewer-file-name {
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  text-align: left;
+  word-break: break-all;
+}
+
+.log-viewer-file-other,
+.log-viewer-link {
+  color: var(--text-muted);
+}
+
+.log-viewer-num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.log-viewer-modified {
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  color: var(--text-muted);
+  white-space: pre;
+}
+
+/* 경로 막대 · 파일 이름: 링크처럼 보이는 버튼 */
+.log-viewer-linkbtn {
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+
+.log-viewer-linkbtn:hover {
+  text-decoration: underline;
+}

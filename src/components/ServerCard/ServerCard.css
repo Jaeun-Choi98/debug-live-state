@@ -156,3 +156,15 @@
   color: var(--accent);
   white-space: nowrap;
 }
+
+/* 자동 재시작 상태 (프로세스 이름 아래) */
+.server-card-watch {
+  margin: 2px 0 0 14px;
+  font-size: 0.68rem;
+  white-space: nowrap;
+  cursor: help;
+}
+.server-card-watch-ok { color: var(--success); }
+.server-card-watch-warn { color: var(--warning); }
+.server-card-watch-error { color: var(--error); }
+.server-card-watch-muted { color: var(--text-muted); }

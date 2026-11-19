@@ -101,9 +101,10 @@ func TestMonitorOverSSH(t *testing.T) {
 	// 이 테스트만 쓰는 고유한 명령줄로 실행되는 프로세스
 	marker := fmt.Sprintf("%d", 30000+time.Now().UnixNano()%10000)
 	script := filepath.Join(dir, "start.sh")
-	logFile := filepath.Join(dir, "app.log")
+	logDir := filepath.Join(dir, "logs")
+	os.MkdirAll(filepath.Join(logDir, "old"), 0o755)
 	os.WriteFile(script, []byte("#!/bin/sh\nexec sleep "+marker+"\n"), 0o755)
-	os.WriteFile(logFile, []byte("line1\nline2\nline3\n"), 0o644)
+	os.WriteFile(filepath.Join(logDir, "app.log"), []byte("line1\nline2\nline3\n"), 0o644)
 	t.Cleanup(func() { exec.Command("pkill", "-f", "^sleep "+marker+"$").Run() })
 
 	store := NewStore(filepath.Join(dir, "processes.json"))
@@ -113,7 +114,8 @@ func TestMonitorOverSSH(t *testing.T) {
 			{ID: "local", Group: "uw", Host: host, Port: port, User: "ops", Password: "pw"},
 			{ID: "wrong-pw", Group: "uw", Host: host, Port: port, User: "ops", Password: "nope"},
 		},
-		Processes: []Process{{ID: "app", Server: "local", Match: "^sleep " + marker + "$", LogFile: logFile, StartScript: script}},
+		Processes: []Process{{ID: "app", Server: "local", Match: "^sleep " + marker + "$", LogDir: logDir, StartScript: script,
+			AutoRestart: true, WatchName: "sleep", WatchArgs: marker}},
 	})
 	if _, err := store.Save(body); err != nil {
 		t.Fatal(err)
@@ -171,8 +173,21 @@ func TestMonitorOverSSH(t *testing.T) {
 		t.Errorf("second start: %v", err)
 	}
 
-	if output, err := monitor.Log(ctx, "app", 2); err != nil || output != "line2\nline3\n" {
+	if output, err := monitor.Log(ctx, "app", "app.log", 2); err != nil || output != "line2\nline3\n" {
 		t.Errorf("log = %q, %v", output, err)
+	}
+	if _, err := monitor.Log(ctx, "app", "../start.sh", 2); !isStatus(err, http.StatusBadRequest) {
+		t.Errorf("log outside logDir: %v", err)
+	}
+	if list, err := monitor.Files(ctx, "app", ""); err != nil || len(list.Entries) != 2 ||
+		list.Entries[0].Name != "old" || list.Entries[0].Type != "dir" || list.Entries[1].Name != "app.log" || list.Entries[1].Size != 18 {
+		t.Errorf("files = %+v, %v", list, err)
+	}
+	if list, err := monitor.Files(ctx, "app", "old"); err != nil || len(list.Entries) != 0 {
+		t.Errorf("empty dir = %+v, %v", list, err)
+	}
+	if _, err := monitor.Files(ctx, "app", "app.log"); err == nil {
+		t.Error("listing a file should fail")
 	}
 
 	if _, err := monitor.Control(ctx, "app", "restart"); err != nil {
@@ -192,6 +207,38 @@ func TestMonitorOverSSH(t *testing.T) {
 
 	if _, err := monitor.Control(ctx, "app", "delete"); !isStatus(err, http.StatusNotFound) {
 		t.Errorf("unknown action: %v", err)
+	}
+
+	// 자동 재시작: 화면에서 중지했으면 다시 시작하지 않는다.
+	watch := func() *WatchStatus {
+		t.Helper()
+		monitor.Reset()
+		servers, _ := monitor.GroupStatus(ctx, "uw")
+		return servers[0].Processes[0].Watch
+	}
+	monitor.watchOnce(ctx)
+	if w := watch(); w == nil || w.Healthy || !w.Paused || w.Restarts != 0 {
+		t.Fatalf("paused watch = %+v", w)
+	}
+
+	// 화면에서 시작하면 다시 감시하고, 밖에서 죽은 프로세스는 재시작 대기(기본 30초)가 지난 뒤 다시 시작한다.
+	if _, err := monitor.Control(ctx, "app", "start"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waitFor(true)
+	exec.Command("pkill", "-f", "^sleep "+marker+"$").Run()
+	waitFor(false)
+	monitor.watchOnce(ctx)
+	if w := watch(); w.Healthy || w.Paused || w.Restarts != 0 {
+		t.Fatalf("restarted within restartDelay: %+v", w)
+	}
+	monitor.mu.Lock()
+	monitor.watches["app"].lastAttempt = time.Now().Add(-defaultRestartDelay)
+	monitor.mu.Unlock()
+	monitor.watchOnce(ctx)
+	waitFor(true)
+	if w := watch(); !w.Healthy || w.Restarts != 1 || w.LastRestartAt == nil || w.LastError != "" {
+		t.Fatalf("auto restart = %+v", w)
 	}
 }
 

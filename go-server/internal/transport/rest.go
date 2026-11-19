@@ -44,9 +44,12 @@ func New(cfg *config.Configuration) *RestServer {
 	// 그룹 · 서버 · 프로세스 설정, SSH 로 확인한 프로세스 상태 · 로그, 프로세스 제어
 	store := processes.NewStore(cfg.ProcessesFile)
 	monitor := processes.NewMonitor(store, cfg.KnownHostsFile)
+	// 자동 재시작을 켠 프로세스를 감시한다. ( 서버 종료 시 Shutdown 에서 멈춘다 )
+	monitor.StartWatchdog()
 	api.GET("/config", handleGetConfig(store))
 	api.PUT("/config", requireJSON, handlePutConfig(store, monitor))
 	api.GET("/status", handleStatus(monitor))
+	api.GET("/processes/:id/files", handleFiles(monitor))
 	api.GET("/processes/:id/log", handleLog(monitor))
 	api.POST("/processes/:id/:action", requireJSON, handleControl(monitor))
 
@@ -158,11 +161,24 @@ func handleStatus(monitor *processes.Monitor) gin.HandlerFunc {
 	}
 }
 
-// GET /api/processes/:id/log?lines=200 : 로그 파일 끝부분
+// GET /api/processes/:id/files?path=2026-11 : 로그 폴더 아래 폴더의 파일 · 폴더 목록 ( path 를 비우면 로그 폴더 )
+func handleFiles(monitor *processes.Monitor) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		list, err := monitor.Files(c.Request.Context(), c.Param("id"), c.Query("path"))
+		if err != nil {
+			respondError(c, err)
+			return
+		}
+		c.Header("Cache-Control", "no-store")
+		c.JSON(http.StatusOK, list)
+	}
+}
+
+// GET /api/processes/:id/log?path=app.log&lines=200 : 로그 폴더 아래 파일의 끝부분
 func handleLog(monitor *processes.Monitor) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		lines, _ := strconv.Atoi(c.DefaultQuery("lines", "200"))
-		output, err := monitor.Log(c.Request.Context(), c.Param("id"), lines)
+		output, err := monitor.Log(c.Request.Context(), c.Param("id"), c.Query("path"), lines)
 		if err != nil {
 			respondError(c, err)
 			return

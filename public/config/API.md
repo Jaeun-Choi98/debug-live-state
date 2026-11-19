@@ -3,7 +3,8 @@
 화면(브라우저)은 사이트 서버(Go 서버)의 API 만 호출합니다. Go 서버가 각 서버에 SSH 로 접속해 정해진 명령만 실행합니다.
 
 ```
-브라우저 ──HTTP──▶ Go 서버 (/api) ──SSH (비밀번호)──▶ 각 서버: ps / tail / kill / 시작 스크립트
+브라우저 ──HTTP──▶ Go 서버 (/api) ──SSH (비밀번호)──▶ 각 서버: ps / ls / tail / kill / 시작 스크립트
+                    └ 자동 재시작 감시 (watchIntervalMs 마다)
 ```
 
 - 배포: **Go 서버**(`go-server`, 기본 포트 `8088`)가 화면과 API 를 함께 제공합니다.
@@ -20,7 +21,8 @@
 | 용도 | 명령 |
 |---|---|
 | 상태 확인 | `LC_ALL=C ps -eo pid=,pcpu=,pmem=,etime=,args=` (서버마다 2초에 최대 1번, 여러 사람이 봐도 공유) |
-| 로그 | `tail -n <줄 수> -- '<로그 파일>'` |
+| 로그 폴더 목록 | `cd -- '<로그 폴더>/<경로>'` 후 `LC_ALL=C ls -lAnt` (최대 1000개) |
+| 로그 | `tail -n <줄 수> -- '<로그 폴더>/<경로>'` |
 | 중지 | `kill -TERM <PID ...>` (PID 는 ps 결과에서 match 정규식으로 찾은 값) |
 | 시작 | 아래 명령 (스크립트가 있는 폴더에서 백그라운드로 실행, 출력은 버림) |
 
@@ -31,6 +33,17 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 - SSH 연결은 서버마다 열어 두고 재사용합니다. 설정을 저장하면 모두 닫고 다시 연결합니다.
 - 처음 접속한 서버의 호스트 키를 `known_hosts` 에 기록하고, 다음부터 키가 다르면 접속하지 않습니다.
 - 명령은 10초 안에 끝나지 않으면 실패로 처리합니다.
+
+### 자동 재시작
+
+`autoRestart` 를 켠 프로세스는 Go 서버가 `watchIntervalMs`(기본 10초)마다 확인합니다. (ps 결과는 화면 조회와 공유)
+
+- **감시 프로세스**: ps 명령줄 첫 단어의 파일 이름이 `watchName` 과 같고, 명령줄에 `watchArgs` 가 들어 있는 프로세스. 화면 표시용 `match` 와 별개입니다.
+- 감시 프로세스가 없으면 시작 스크립트를 실행합니다(위 시작 명령). 그 뒤 `restartDelayMs`(기본 30초) 동안은 뜨기를 기다리고, 그래도 없으면 횟수 제한 없이 다시 실행합니다.
+- 화면에서 **stop** 하면 **start** · **restart** 할 때까지 자동 재시작을 멈춥니다. 화면에서 시작해도 `restartDelayMs` 동안은 자동으로 다시 실행하지 않습니다.
+- 두 값은 설정 파일에서 매번 읽으므로, 저장하면 다음 확인부터 바로 적용됩니다.
+- 멈춤 상태 · 재시작 횟수는 Go 서버 메모리에만 있어서, Go 서버를 다시 켜면 초기화됩니다.
+- 자동 시작은 Go 서버 로그에 `[WATCHDOG]` 으로 남습니다.
 
 ---
 
@@ -43,13 +56,16 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 ```json
 {
   "pollIntervalMs": 5000,
+  "watchIntervalMs": 10000,
+  "restartDelayMs": 30000,
   "groups": [{ "slug": "uw", "name": "의왕" }],
   "servers": [
     { "id": "uw-app1", "group": "uw", "label": "의왕 APP 1", "host": "10.0.0.11", "port": 22, "user": "ops", "hasPassword": true }
   ],
   "processes": [
     { "id": "shelter", "server": "uw-app1", "label": "Shelter", "match": "java .*shelter\\.jar",
-      "logFile": "/opt/shelter/logs/app.log", "startScript": "/opt/shelter/start.sh" }
+      "logDir": "/opt/shelter/logs", "startScript": "/opt/shelter/start.sh",
+      "autoRestart": true, "watchName": "java", "watchArgs": "/opt/shelter/shelter.jar" }
   ]
 }
 ```
@@ -57,6 +73,8 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 | 필드 | 필수 | 설명 |
 |---|---|---|
 | pollIntervalMs | | 상태 확인 주기(ms). 1000 이상. 없으면 5000 |
+| watchIntervalMs | | 자동 재시작 확인 주기(ms). 1000 이상. 없으면 10000 |
+| restartDelayMs | | 시작한 뒤 프로세스가 뜨기를 기다리는 시간(ms). 이 시간 안에는 다시 자동 시작하지 않음. 1000 이상. 없으면 30000 |
 | groups[].slug | O | 주소 경로. 영문 소문자 · 숫자 · `-`. `all` `api` `config` `static` `log-config` 제외 |
 | groups[].name | O | 탭 · 제목에 보일 이름 |
 | servers[].id | O | 고유 id |
@@ -71,8 +89,11 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 | processes[].server | O | 서버 id |
 | processes[].label | | 표시 이름 (없으면 id) |
 | processes[].match | O | ps 명령줄(args)에 대한 정규식 (Go RE2 문법) |
-| processes[].logFile | | 로그 파일 절대 경로 (영문 · 숫자 · `. _ - /`) |
+| processes[].logDir | | 로그 폴더 절대 경로 (영문 · 숫자 · `. _ - /`) |
 | processes[].startScript | | 시작 스크립트 절대 경로 (영문 · 숫자 · `. _ - /`) |
+| processes[].autoRestart | | `true` 면 자동 재시작. `watchName` · `startScript` 필요 |
+| processes[].watchName | | 감시 프로세스의 실행 파일 이름 (경로 · 공백 없이, 정확히 일치) |
+| processes[].watchArgs | | 감시 프로세스 명령줄에 들어 있어야 하는 문자열 (정규식 아님) |
 
 ### PUT /api/config
 
@@ -97,7 +118,8 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
       "id": "uw-app1",
       "checkedAt": "2026-11-19T11:15:19+09:00",
       "processes": [
-        { "id": "shelter", "instances": [{ "pid": 4321, "cpu": 12.5, "mem": 3.2, "elapsed": "2-01:02:03", "command": "java -jar /opt/shelter/shelter.jar" }] }
+        { "id": "shelter", "instances": [{ "pid": 4321, "cpu": 12.5, "mem": 3.2, "elapsed": "2-01:02:03", "command": "java -jar /opt/shelter/shelter.jar" }],
+          "watch": { "healthy": true, "restarts": 1, "lastRestartAt": "2026-11-19T10:02:03+09:00" } }
       ]
     },
     { "id": "uw-db", "error": "ssh ops@10.0.0.12:22 접속 실패: ... connection refused", "checkedAt": "...", "processes": [] }
@@ -106,16 +128,42 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 ```
 
 - `instances` 가 비어 있으면 중지된 프로세스입니다.
+- `watch` 는 `watchName` 을 등록한 프로세스에만 있습니다. `healthy` 감시 프로세스가 지금 있는지, `paused` 화면에서 중지해 자동 재시작이 멈췄는지, `restarts` Go 서버가 켜진 뒤 자동으로 시작한 횟수, `lastRestartAt` 마지막 자동 시작 시각, `lastError` 마지막 자동 시작 · 확인 오류.
 - SSH 접속에 실패한 서버는 `error` 에 이유가 들어가고, 나머지 서버의 결과는 그대로 옵니다. (응답은 `200`)
 - 없는 그룹이면 `404`
 
-### GET /api/processes/:id/log?lines=200
+### GET /api/processes/:id/files?path=2026-11
 
-로그 파일의 마지막 `lines` 줄(1~2000, 기본 200)을 돌려줍니다. 응답 `200` `{"output": "...\n"}`
+로그 폴더 아래 `path` 폴더(로그 폴더 기준 상대 경로, 비우면 로그 폴더)의 파일 · 폴더 목록입니다. 폴더가 먼저, 그 안에서는 최근 수정 순입니다.
+
+```json
+{
+  "path": "2026-11",
+  "entries": [
+    { "name": "archive", "type": "dir", "size": 4096, "modified": "Nov 19 11:15" },
+    { "name": "app.log", "type": "file", "size": 1234, "modified": "Nov 19 11:15" },
+    { "name": "current.log", "type": "link", "size": 7, "modified": "Nov 18  2025", "target": "app.log" }
+  ],
+  "truncated": false
+}
+```
+
+- `type`: `dir` · `file` · `link`(심볼릭 링크) · `other`(장치 파일 등, 열 수 없음). `modified` 는 `ls` 가 보여주는 시각 그대로입니다.
+- 1000개를 넘으면 최근 것만 주고 `truncated: true` 입니다.
 
 | 상태 코드 | 의미 |
 |---|---|
-| `400` | 로그 파일이 등록되지 않음 |
+| `400` | 로그 폴더가 등록되지 않음, 또는 `..` · 빈 구간 · 작은따옴표 · 제어 문자가 들어간 경로 |
+| `404` | 없는 프로세스 |
+| `502` | SSH 실패, 폴더가 없거나 폴더가 아님, 권한 없음 |
+
+### GET /api/processes/:id/log?path=2026-11/app.log&lines=200
+
+로그 폴더 아래 `path` 파일의 마지막 `lines` 줄(1~2000, 기본 200)을 돌려줍니다. 응답 `200` `{"output": "...\n"}`
+
+| 상태 코드 | 의미 |
+|---|---|
+| `400` | 로그 폴더가 등록되지 않음, `path` 없음, 잘못된 경로 (위와 같음) |
 | `404` | 없는 프로세스 |
 | `502` | SSH 실패 또는 tail 실패 (파일 없음 · 권한 없음 등, 서버의 오류 문구 포함) |
 
@@ -123,9 +171,10 @@ cd '<스크립트 폴더>' || exit 1; nohup '<시작 스크립트>' > /dev/null 
 
 프로세스를 시작 · 중지 · 재시작합니다. 본문은 `{}` 입니다. 응답 `200` `{"message": "중지했습니다 · 시작 명령을 보냈습니다"}`
 
-- **stop**: ps 로 찾은 PID 에 SIGTERM 을 보내고, 사라질 때까지 최대 10초 기다립니다. 이미 중지되어 있으면 `"이미 중지되어 있습니다"`
+- **stop**: ps 로 찾은 PID 에 SIGTERM 을 보내고, 사라질 때까지 최대 10초 기다립니다. 이미 중지되어 있으면 `"이미 중지되어 있습니다"`. 자동 재시작을 멈춥니다.
 - **start**: 시작 스크립트를 실행합니다. 이미 실행 중이면 `409`
 - **restart**: stop 후 start. 중지되어 있었으면 start 만 합니다.
+- start · restart 는 멈춘 자동 재시작을 다시 켭니다.
 - 같은 프로세스에 작업이 진행 중이면 `409`. 요청한 IP 와 결과를 서버 로그에 남깁니다.
 
 | 상태 코드 | 의미 |

@@ -151,3 +151,22 @@ select.config-editor-input {
 
 .config-editor-message-error { color: var(--error); }
 .config-editor-message-info { color: var(--success); }
+
+.config-editor-checkbox {
+  display: block;
+  margin: 0 auto;
+}
+
+/* 프로세스 표처럼 열이 많으면 칸이 찌그러지지 않게 최소 너비를 두고 가로로 스크롤한다. */
+.config-editor-section {
+  overflow-x: auto;
+}
+input.config-editor-input { min-width: 90px; }
+.config-editor-col-wide input.config-editor-input { min-width: 170px; }
+.config-editor-col-narrow input.config-editor-input { min-width: 64px; }
+
+.config-editor-defaults {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+}

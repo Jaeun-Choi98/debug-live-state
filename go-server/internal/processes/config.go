@@ -17,7 +17,11 @@ import (
 //
 //	그룹(groups) ─┬─ 서버(servers, group = 그룹 slug) ─┬─ 프로세스(processes, server = 서버 id)
 type Config struct {
-	PollIntervalMs int       `json:"pollIntervalMs,omitempty"`
+	PollIntervalMs int `json:"pollIntervalMs,omitempty"`
+	// 자동 재시작 확인 주기(ms). 0 이면 10000
+	WatchIntervalMs int `json:"watchIntervalMs,omitempty"`
+	// 자동 · 화면에서 시작한 뒤 프로세스가 뜨기를 기다리는 시간(ms). 이 시간 안에는 다시 자동 시작하지 않는다. 0 이면 30000
+	RestartDelayMs int       `json:"restartDelayMs,omitempty"`
 	Groups         []Group   `json:"groups"`
 	Servers        []Server  `json:"servers"`
 	Processes      []Process `json:"processes"`
@@ -50,10 +54,17 @@ type Process struct {
 	Label  string `json:"label,omitempty"`
 	// ps 의 명령줄(args)에 대한 정규식. 일치하는 프로세스를 이 항목의 실행 인스턴스로 본다.
 	Match string `json:"match"`
-	// tail 로 보여줄 로그 파일의 절대 경로
-	LogFile string `json:"logFile,omitempty"`
+	// 로그 폴더의 절대 경로. 화면에서 이 폴더 아래의 파일 · 폴더를 둘러보고 파일을 tail 로 본다.
+	LogDir string `json:"logDir,omitempty"`
 	// 시작 · 재시작 때 실행할 스크립트의 절대 경로 (인자 없이 실행)
 	StartScript string `json:"startScript,omitempty"`
+
+	// 자동 재시작. 켜 두면 감시 프로세스가 ps 에 없을 때 시작 스크립트를 실행한다. (Watchdog 참고)
+	AutoRestart bool `json:"autoRestart,omitempty"`
+	// 감시 프로세스의 실행 파일 이름. ps 명령줄 첫 단어의 파일 이름과 정확히 같아야 한다. (예: java)
+	WatchName string `json:"watchName,omitempty"`
+	// 감시 프로세스의 명령줄에 들어 있어야 하는 문자열 (정규식 아님, 비워 두면 이름만 본다) (예: /opt/app/app.jar)
+	WatchArgs string `json:"watchArgs,omitempty"`
 }
 
 func (s Server) addr() string {
@@ -69,6 +80,8 @@ var (
 	slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 	hostPattern = regexp.MustCompile(`^[A-Za-z0-9.:-]+$`)
 	pathPattern = regexp.MustCompile(`^/[A-Za-z0-9._/-]+$`)
+	// 실행 파일 이름 (경로 · 공백 없이)
+	watchNamePattern = regexp.MustCompile(`^[^/\s]+$`)
 	// 화면 · 서버의 다른 경로와 겹치는 slug
 	reservedSlugs = map[string]bool{"all": true, "api": true, "config": true, "static": true, "log-config": true}
 )
@@ -81,6 +94,12 @@ func (c *Config) Validate() error {
 
 	if c.PollIntervalMs != 0 && c.PollIntervalMs < 1000 {
 		add("pollIntervalMs: 1000 이상이어야 합니다")
+	}
+	if c.WatchIntervalMs != 0 && c.WatchIntervalMs < 1000 {
+		add("watchIntervalMs: 1000 이상이어야 합니다")
+	}
+	if c.RestartDelayMs != 0 && c.RestartDelayMs < 1000 {
+		add("restartDelayMs: 1000 이상이어야 합니다")
 	}
 	if c.Groups == nil || c.Servers == nil || c.Processes == nil {
 		add("groups, servers, processes: 배열이 필요합니다")
@@ -146,11 +165,20 @@ func (c *Config) Validate() error {
 		if _, err := regexp.Compile(p.Match); p.Match == "" || err != nil {
 			add("%s.match: 올바른 정규식이 필요합니다", at)
 		}
-		for field, value := range map[string]string{"logFile": p.LogFile, "startScript": p.StartScript} {
+		for field, value := range map[string]string{"logDir": p.LogDir, "startScript": p.StartScript} {
 			// path.Clean 과 다르면 '..', '//' 등이 들어 있는 경로다.
 			if value != "" && (!pathPattern.MatchString(value) || path.Clean(value) != value) {
 				add("%s.%s: 영문 · 숫자 · . _ - / 로 된 절대 경로가 필요합니다", at, field)
 			}
+		}
+		if p.WatchName != "" && !watchNamePattern.MatchString(p.WatchName) {
+			add("%s.watchName: 경로 · 공백 없는 실행 파일 이름이 필요합니다 (예: java)", at)
+		}
+		if p.AutoRestart && p.WatchName == "" {
+			add("%s.watchName: 자동 재시작에는 감시 프로세스 이름이 필요합니다", at)
+		}
+		if p.AutoRestart && p.StartScript == "" {
+			add("%s.startScript: 자동 재시작에는 시작 스크립트가 필요합니다", at)
 		}
 	}
 	return errors.Join(errs...)
@@ -186,7 +214,26 @@ func (s *Store) Load() (*Config, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return nil, fmt.Errorf("%s: %w", s.path, err)
 	}
+	migrateLogFile(data, &c)
 	return &c, nil
+}
+
+// migrateLogFile 은 예전 설정의 processes[].logFile(로그 파일 하나)을 그 파일이 있는 폴더(logDir)로 바꿔 읽는다.
+// 다음에 저장하면 logDir 로 저장된다.
+func migrateLogFile(data []byte, c *Config) {
+	var legacy struct {
+		Processes []struct {
+			LogFile string `json:"logFile"`
+		} `json:"processes"`
+	}
+	if json.Unmarshal(data, &legacy) != nil || len(legacy.Processes) != len(c.Processes) {
+		return
+	}
+	for i, p := range legacy.Processes {
+		if c.Processes[i].LogDir == "" && p.LogFile != "" {
+			c.Processes[i].LogDir = path.Dir(p.LogFile)
+		}
+	}
 }
 
 // Public 은 화면에 내려줄 설정이다. 비밀번호를 지우고 저장 여부(hasPassword)만 알려준다.

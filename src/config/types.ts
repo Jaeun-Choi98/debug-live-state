@@ -8,12 +8,17 @@
  *   "groups":    [{ "slug": "uw", "name": "의왕" }],
  *   "servers":   [{ "id": "uw-app1", "group": "uw", "label": "의왕 APP 1", "host": "10.0.0.11", "port": 22, "user": "ops", "hasPassword": true }],
  *   "processes": [{ "id": "shelter", "server": "uw-app1", "label": "Shelter", "match": "java .*shelter\\.jar",
- *                   "logFile": "/opt/shelter/logs/app.log", "startScript": "/opt/shelter/start.sh" }]
+ *                   "logDir": "/opt/shelter/logs", "startScript": "/opt/shelter/start.sh",
+ *                   "autoRestart": true, "watchName": "java", "watchArgs": "/opt/shelter/shelter.jar" }]
  * }
  */
 export interface ProcessConfig {
   /** 상태 확인 주기(ms). 없으면 5000 */
   pollIntervalMs?: number;
+  /** 자동 재시작 확인 주기(ms). 없으면 10000 */
+  watchIntervalMs?: number;
+  /** 시작한 뒤 프로세스가 뜨기를 기다리는 시간(ms). 이 시간 안에는 다시 자동 시작하지 않는다. 없으면 30000 */
+  restartDelayMs?: number;
   /** 배열 순서가 화면 표시 순서 */
   groups: GroupEntry[];
   servers: ServerEntry[];
@@ -51,10 +56,16 @@ export interface ProcessEntry {
   label?: string;
   /** ps 명령줄에 대한 정규식. 맞는 프로세스가 있으면 실행 중으로 본다. */
   match: string;
-  /** 로그 보기에서 tail 할 파일의 절대 경로 */
-  logFile?: string;
+  /** 로그 폴더의 절대 경로. 로그 보기에서 이 폴더 아래를 둘러보고 파일을 tail 로 본다. */
+  logDir?: string;
   /** 시작 · 재시작 때 실행할 스크립트의 절대 경로 */
   startScript?: string;
+  /** 자동 재시작. 감시 프로세스가 ps 에 없으면 Go 서버가 시작 스크립트를 실행한다. (watchName · startScript 필요) */
+  autoRestart?: boolean;
+  /** 감시 프로세스의 실행 파일 이름. ps 명령줄 첫 단어의 파일 이름과 정확히 같아야 한다. (예: java) */
+  watchName?: string;
+  /** 감시 프로세스의 명령줄에 들어 있어야 하는 문자열. 정규식이 아니다. (예: /opt/app/app.jar) */
+  watchArgs?: string;
 }
 
 /** GET /api/status 응답의 서버 하나 */
@@ -63,7 +74,39 @@ export interface ServerStatus {
   /** SSH 접속 · ps 실행에 실패한 이유 */
   error?: string;
   checkedAt: string;
-  processes: { id: string; instances: ProcessInstance[] }[];
+  processes: { id: string; instances: ProcessInstance[]; watch?: WatchStatus }[];
+}
+
+/** 감시 프로세스(watchName)를 등록한 프로세스의 감시 · 자동 재시작 상태. Go 서버 메모리에만 있다. */
+export interface WatchStatus {
+  /** 감시 프로세스가 지금 ps 에 있는지 */
+  healthy: boolean;
+  /** 화면에서 중지해 자동 재시작이 멈춘 상태. 시작 · 재시작하면 다시 켜진다. */
+  paused?: boolean;
+  /** Go 서버가 켜진 뒤 자동으로 시작한 횟수 */
+  restarts: number;
+  lastRestartAt?: string;
+  lastError?: string;
+}
+
+/** GET /api/processes/:id/files 응답 */
+export interface FileList {
+  /** 로그 폴더 기준 상대 경로 ('' 이면 로그 폴더) */
+  path: string;
+  /** 폴더가 먼저, 그 안에서는 최근 수정 순 */
+  entries: FileEntry[];
+  /** 항목이 너무 많아 오래된 것을 잘랐는지 */
+  truncated?: boolean;
+}
+
+export interface FileEntry {
+  name: string;
+  type: 'dir' | 'file' | 'link' | 'other';
+  size: number;
+  /** ls 가 보여주는 수정 시각 ("Nov 19 11:15") */
+  modified: string;
+  /** 심볼릭 링크가 가리키는 경로 */
+  target?: string;
 }
 
 export interface ProcessInstance {

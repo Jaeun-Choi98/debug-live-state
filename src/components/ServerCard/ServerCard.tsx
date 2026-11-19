@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ProcessEntry, ServerEntry, ServerStatus } from '../../config/types';
+import { ProcessEntry, ServerEntry, ServerStatus, WatchStatus } from '../../config/types';
 import { ServerState } from '../StatusSidebar/StatusSidebar';
 import { requestApi } from '../../hooks/useProcessConfig';
 import './ServerCard.css';
@@ -23,6 +23,22 @@ const PROCESSES_API = `${process.env.PUBLIC_URL}/api/processes`;
 type Action = 'start' | 'stop' | 'restart';
 const ACTION_TEXT: Record<Action, string> = { start: '시작', stop: '중지', restart: '재시작' };
 
+/** 자동 재시작 배지의 글자 · 색 · 설명. 자동 재시작을 켜지 않았으면 null */
+const autoRestartBadge = (process: ProcessEntry, watch: WatchStatus | undefined) => {
+  if (!process.autoRestart || !watch) return null;
+  const detail = [
+    `감시: ${process.watchName}${process.watchArgs ? ` (명령줄에 "${process.watchArgs}" 포함)` : ''}`,
+    `자동 시작 ${watch.restarts}회${watch.lastRestartAt ? ` · 마지막 ${new Date(watch.lastRestartAt).toLocaleString()}` : ''}`,
+    watch.lastError && `오류: ${watch.lastError}`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+  if (watch.paused) return { text: '자동 재시작 멈춤', kind: 'muted', title: `화면에서 중지해 멈췄습니다. 시작 · 재시작하면 다시 켜집니다.\n${detail}` };
+  if (watch.lastError) return { text: '자동 재시작 오류', kind: 'error', title: detail };
+  if (!watch.healthy) return { text: '감시 프로세스 없음 · 재시작 대기', kind: 'warn', title: detail };
+  return { text: watch.restarts > 0 ? `자동 재시작 ${watch.restarts}회` : '자동 재시작', kind: 'ok', title: detail };
+};
+
 /** 서버 하나의 SSH 접속 상태와, 그 서버에서 확인한 프로세스별 실행 상태 · 로그 · 시작/중지 버튼 */
 const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, state: serverState, onShowLog, onActionDone }) => {
   /** 프로세스 id → 진행 중인 동작 */
@@ -31,7 +47,8 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, stat
 
   const runAction = async (process: ProcessEntry, action: Action) => {
     const name = process.label || process.id;
-    if (action !== 'start' && !window.confirm(`${server.label || server.id} 의 ${name} 을(를) ${ACTION_TEXT[action]}할까요?`)) return;
+    const pauseNote = action === 'stop' && process.autoRestart ? '\n자동 재시작은 다시 시작할 때까지 멈춥니다.' : '';
+    if (action !== 'start' && !window.confirm(`${server.label || server.id} 의 ${name} 을(를) ${ACTION_TEXT[action]}할까요?${pauseNote}`)) return;
 
     setBusy(prev => ({ ...prev, [process.id]: action }));
     setMessage(null);
@@ -84,12 +101,14 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, stat
           </thead>
           <tbody>
             {processes.map(process => {
-              const instances = status?.processes.find(s => s.id === process.id)?.instances ?? [];
+              const processStatus = status?.processes.find(s => s.id === process.id);
+              const instances = processStatus?.instances ?? [];
               const running = instances.length > 0;
               // 접속 실패 · 첫 확인 전에는 실행 여부를 알 수 없다.
               const known = status !== undefined && !status.error;
               const state = !known ? 'idle' : running ? 'ok' : 'error';
               const action = busy[process.id];
+              const badge = known ? autoRestartBadge(process, processStatus?.watch) : null;
 
               return (
                 <tr key={process.id} className={`server-card-row-${state}`}>
@@ -99,6 +118,11 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, stat
                       <span className="server-card-process-name">{process.label || process.id}</span>
                       {known && !running && <span className="server-card-badge">STOPPED</span>}
                     </div>
+                    {badge && (
+                      <div className={`server-card-watch server-card-watch-${badge.kind}`} title={badge.title}>
+                        ↻ {badge.text}
+                      </div>
+                    )}
                   </td>
                   <td className="server-card-mono" title={instances.map(i => `${i.pid}: ${i.command}`).join('\n')}>
                     {running ? instances.map(i => i.pid).join(', ') : '-'}
@@ -112,7 +136,7 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, stat
                         <span className="server-card-busy">{ACTION_TEXT[action]} 중...</span>
                       ) : (
                         <>
-                          <button className="btn-text" onClick={() => onShowLog(process)} disabled={!process.logFile} title={process.logFile || '로그 파일이 등록되지 않았습니다'}>
+                          <button className="btn-text" onClick={() => onShowLog(process)} disabled={!process.logDir} title={process.logDir || '로그 폴더가 등록되지 않았습니다'}>
                             로그
                           </button>
                           {known && !running && (

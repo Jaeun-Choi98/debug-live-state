@@ -1,6 +1,8 @@
 import { ProcessConfig } from './types';
 
 export const DEFAULT_POLL_INTERVAL_MS = 5000;
+export const DEFAULT_WATCH_INTERVAL_MS = 10000;
+export const DEFAULT_RESTART_DELAY_MS = 30000;
 
 /** 화면 · 서버의 다른 경로와 겹쳐서 그룹 slug 로 쓸 수 없는 값 */
 export const RESERVED_SLUGS = ['all', 'api', 'config', 'static', 'log-config'];
@@ -26,9 +28,12 @@ export function validateProcessConfig(raw: unknown): ValidationResult {
   }
 
   const errors: string[] = [];
-  const { pollIntervalMs, groups, servers, processes } = raw;
-  if (pollIntervalMs !== undefined && !(Number.isInteger(pollIntervalMs) && (pollIntervalMs as number) >= 1000)) {
-    errors.push('pollIntervalMs: 1000 이상이어야 합니다');
+  const { groups, servers, processes } = raw;
+  for (const field of ['pollIntervalMs', 'watchIntervalMs', 'restartDelayMs'] as const) {
+    const value = raw[field];
+    if (value !== undefined && !(Number.isInteger(value) && (value as number) >= 1000)) {
+      errors.push(`${field}: 1000 이상이어야 합니다`);
+    }
   }
   if (!Array.isArray(groups) || !Array.isArray(servers) || !Array.isArray(processes)) {
     errors.push('groups, servers, processes: 배열이 필요합니다');
@@ -88,10 +93,25 @@ export function validateProcessConfig(raw: unknown): ValidationResult {
     }
     if (!validPattern) errors.push(`${at}.match: 올바른 정규식이 필요합니다`);
 
-    for (const field of ['logFile', 'startScript'] as const) {
+    for (const field of ['logDir', 'startScript'] as const) {
       if (process[field] !== undefined && !isSafePath(process[field])) {
         errors.push(`${at}.${field}: 영문 · 숫자 · . _ - / 로 된 절대 경로가 필요합니다`);
       }
+    }
+
+    if (process.autoRestart !== undefined && typeof process.autoRestart !== 'boolean') {
+      errors.push(`${at}.autoRestart: true 또는 false 여야 합니다`);
+    }
+    if (process.watchName !== undefined && !(typeof process.watchName === 'string' && /^[^/\s]+$/.test(process.watchName))) {
+      errors.push(`${at}.watchName: 경로 · 공백 없는 실행 파일 이름이 필요합니다 (예: java)`);
+    } else if (process.autoRestart === true && process.watchName === undefined) {
+      errors.push(`${at}.watchName: 자동 재시작에는 감시 프로세스 이름이 필요합니다`);
+    }
+    if (process.watchArgs !== undefined && typeof process.watchArgs !== 'string') {
+      errors.push(`${at}.watchArgs: 문자열이어야 합니다`);
+    }
+    if (process.autoRestart === true && process.startScript === undefined) {
+      errors.push(`${at}.startScript: 자동 재시작에는 시작 스크립트가 필요합니다`);
     }
   });
 

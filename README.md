@@ -1,18 +1,26 @@
 # Process Management
 
 여러 서버에 SSH 로 접속해 등록한 프로세스의 실행 상태(PID · CPU · MEM · 실행 시간)를 확인하고,
-로그 파일을 보고, 시작 · 중지 · 재시작하는 관리 화면입니다. 서버는 사용자가 만든 그룹(의왕, 광명 ...)으로
+로그 폴더를 둘러보며 로그 파일을 보고, 시작 · 중지 · 재시작하는 관리 화면입니다. 꺼진 프로세스를 자동으로 다시 시작할 수도 있습니다. 서버는 사용자가 만든 그룹(의왕, 광명 ...)으로
 묶어서 보여주고, 그룹마다 주소가 나뉩니다. (`/all` 전체, `/uw` 의왕만)
 
 ```
-브라우저 ──HTTP──▶ Go 서버 (/api) ──SSH (비밀번호)──▶ 각 서버: ps / tail / kill / 시작 스크립트
+브라우저 ──HTTP──▶ Go 서버 (/api) ──SSH (비밀번호)──▶ 각 서버: ps / ls / tail / kill / 시작 스크립트
+                    └ 자동 재시작 감시 (watchIntervalMs 마다)
 ```
 
 ## 설계 원칙
 
-- **정해진 명령만 실행**: 설정에는 명령을 적지 않고, 프로세스를 찾을 정규식(`match`)과 로그 파일 ·
-  시작 스크립트 경로만 적습니다. Go 서버가 `ps`, `tail`, `kill -TERM <PID>`, `nohup <스크립트>` 만 만들어
-  실행하며, 경로는 셸 특수문자가 없는 절대 경로만 허용합니다.
+- **정해진 명령만 실행**: 설정에는 명령을 적지 않고, 프로세스를 찾을 정규식(`match`)과 로그 폴더 ·
+  시작 스크립트 경로만 적습니다. Go 서버가 `ps`, `ls`, `tail`, `kill -TERM <PID>`, `nohup <스크립트>` 만 만들어
+  실행하며, 설정의 경로는 셸 특수문자가 없는 절대 경로만 허용합니다.
+- **로그는 폴더 단위**: 로그 폴더(`logDir`) 아래의 파일 · 폴더 목록을 보여주고, 고른 파일을 `tail` 로 봅니다.
+  `..` 이 들어간 경로처럼 로그 폴더 밖을 가리키는 요청은 거부합니다. (폴더 안의 심볼릭 링크가 가리키는 곳은 막지 않습니다)
+- **자동 재시작은 정확한 비교로**: 화면 표시용 `match`(정규식)와 따로, 감시 프로세스를 실행 파일 이름(`watchName`,
+  정확히 일치)과 명령줄에 들어 있어야 할 문자열(`watchArgs`)로 적습니다. 감시 프로세스가 `ps` 에 없으면 시작
+  스크립트를 실행하고, 재시작 대기(`restartDelayMs`, 기본 30초) 뒤에도 없으면 횟수 제한 없이 다시 실행합니다. 화면에서 **중지**하면 다시
+  시작할 때까지 자동 재시작을 멈춥니다. (이 '멈춤' 과 재시작 횟수는 Go 서버 메모리에만 있어서, Go 서버를 다시 켜면
+  풀립니다. 오래 꺼 둘 프로세스는 설정에서 자동 재시작을 끄세요)
 - **비밀번호는 쓰기 전용**: ⚙ 설정에서 입력한 SSH 비밀번호는 Go 서버의 설정 파일(0600)에만 저장되고,
   조회 API 는 `hasPassword` 만 돌려줍니다. 비워 두고 저장하면 기존 비밀번호를 유지하되, host · port · user 가
   바뀌면 다시 입력해야 합니다. (저장된 비밀번호를 다른 서버로 보낼 수 없도록)
@@ -33,6 +41,8 @@
 ```json
 {
   "pollIntervalMs": 5000,
+  "watchIntervalMs": 10000,
+  "restartDelayMs": 30000,
   "groups": [{ "slug": "uw", "name": "의왕" }],
   "servers": [
     { "id": "uw-app1", "group": "uw", "label": "의왕 APP 1", "host": "10.0.0.11", "port": 22, "user": "ops", "password": "..." }
@@ -43,8 +53,11 @@
       "server": "uw-app1",
       "label": "Shelter",
       "match": "java .*shelter\\.jar",
-      "logFile": "/opt/shelter/logs/app.log",
-      "startScript": "/opt/shelter/start.sh"
+      "logDir": "/opt/shelter/logs",
+      "startScript": "/opt/shelter/start.sh",
+      "autoRestart": true,
+      "watchName": "java",
+      "watchArgs": "/opt/shelter/shelter.jar"
     }
   ]
 }
@@ -53,6 +66,8 @@
 | 필드 | 필수 | 설명 |
 |---|---|---|
 | `pollIntervalMs` | | 상태 확인 주기(ms). 1000 이상, 생략 시 5000 |
+| `watchIntervalMs` | | 자동 재시작 확인 주기(ms). 1000 이상, 생략 시 10000 |
+| `restartDelayMs` | | 자동 · 화면에서 시작한 뒤 프로세스가 뜨기를 기다리는 시간(ms). 이 시간 안에는 다시 자동 시작하지 않습니다. 1000 이상, 생략 시 30000 |
 | `groups[].slug` | ✓ | 주소 경로(`/uw`). 영문 소문자 · 숫자 · `-`. `all` `api` `config` `static` `log-config` 제외 |
 | `groups[].name` | ✓ | 탭 · 제목에 보일 이름 |
 | `servers[].id` / `group` | ✓ | 고유 id / 그룹 slug |
@@ -60,13 +75,17 @@
 | `servers[].label` | | 표시 이름 (생략 시 id) |
 | `processes[].id` / `server` | ✓ | 고유 id / 서버 id |
 | `processes[].match` | ✓ | `ps` 명령줄에 대한 정규식(Go RE2). 다른 프로세스와 겹치지 않게 구체적으로 (`worker\.sh` 는 `com.apple.mdworker.shared` 에도 맞습니다) |
-| `processes[].logFile` | | 로그 보기에서 `tail` 할 파일의 절대 경로 |
+| `processes[].logDir` | | 로그 폴더의 절대 경로. 로그 보기에서 이 폴더 아래를 둘러봅니다 |
 | `processes[].startScript` | | 시작 · 재시작 때 인자 없이 실행할 스크립트의 절대 경로. 스크립트가 있는 폴더에서 `nohup` 으로 실행하고 출력은 버리므로, 로그는 스크립트가 직접 남겨야 합니다 |
 | `processes[].label` | | 표시 이름 (생략 시 id) |
+| `processes[].autoRestart` | | `true` 면 감시 프로세스가 없을 때 시작 스크립트를 자동 실행합니다. `watchName` · `startScript` 필요 |
+| `processes[].watchName` | 자동 재시작 시 ✓ | 감시 프로세스의 실행 파일 이름. `ps` 명령줄 첫 단어의 파일 이름과 정확히 같아야 합니다 (`/usr/bin/java ...` → `java`, `#!/bin/sh` 스크립트 → `sh`) |
+| `processes[].watchArgs` | | 감시 프로세스의 명령줄에 들어 있어야 하는 문자열 (정규식 아님). 같은 이름의 다른 프로세스와 구분합니다 |
 
 - 배열 순서가 화면 표시 순서입니다.
 - 규칙은 프론트(`src/config/schema.ts`)와 Go 서버(`go-server/internal/processes/config.go`)가 같은 내용으로 검사합니다.
 - 중지는 match 로 찾은 PID 에 SIGTERM 을 보내고 10초 기다립니다. 그 안에 종료되지 않으면 실패로 알려주며 SIGKILL 은 보내지 않습니다.
+- 예전 설정의 `logFile`(파일 하나)은 읽을 때 그 파일이 있는 폴더(`logDir`)로 바뀌고, 다음 저장 때 `logDir` 로 저장됩니다.
 
 ### 사이트 안내문 (config/README.md, config/API.md)
 
@@ -116,8 +135,8 @@ src/
   components/
     Header/                  그룹 탭 (/all, /uw ...)
     StatusSidebar/           그룹 · 서버 상태 사이드바 (클릭 시 카드로 이동)
-    ServerCard/              서버 1대: 접속 상태 + 프로세스 표 + 로그 · 시작 · 중지 버튼
-    LogViewer/               로그 보기 (줄 수, 필터, 자동 새로고침)
+    ServerCard/              서버 1대: 접속 상태 + 프로세스 표 + 자동 재시작 상태 + 로그 · 시작 · 중지 버튼
+    LogViewer/               로그 폴더 둘러보기 → 파일 보기 (줄 수, 필터, 자동 새로고침)
     ConfigEditor/            그룹 · 서버 · 프로세스 편집 / 가져오기 / 내보내기
     MarkdownPanel/           config/README.md · API.md 를 접이식 패널로 표시
   pages/Dashboard.tsx        그룹 → 서버 → 프로세스 화면 구성, 검색, 사이드바 이동
@@ -128,6 +147,7 @@ go-server/internal/
   processes/
     config.go                설정 타입 · 검사 · 저장 (비밀번호 유지 규칙)
     remote.go                SSH 연결 재사용 · 명령 실행 · known_hosts 확인
-    monitor.go               ps 로 상태 확인, tail 로그, kill · 시작 스크립트로 제어
+    monitor.go               ps 로 상태 확인, ls · tail 로 로그 폴더 · 파일, kill · 시작 스크립트로 제어
+    watchdog.go              자동 재시작 감시 (watchName · watchArgs)
   transport/rest.go          /api 핸들러
 ```

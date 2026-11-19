@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { DEFAULT_POLL_INTERVAL_MS, validateProcessConfig } from '../../config/schema';
+import { DEFAULT_POLL_INTERVAL_MS, DEFAULT_RESTART_DELAY_MS, DEFAULT_WATCH_INTERVAL_MS, validateProcessConfig } from '../../config/schema';
 import { ProcessConfig, ServerEntry } from '../../config/types';
 import './ConfigEditor.css';
 
@@ -13,7 +13,7 @@ interface ConfigEditorProps {
 type Section = 'groups' | 'servers' | 'processes';
 
 /**
- * 편집 중인 한 행. 입력칸 값을 문자열 그대로 들고 있다가 검사 · 저장할 때 변환한다.
+ * 편집 중인 한 행. 입력칸 값을 문자열 그대로 들고 있다가 검사 · 저장할 때 변환한다. (체크박스는 'true' / '')
  * key 는 React 용이다. (id 는 편집되므로 key 로 쓸 수 없다)
  */
 type Row = Record<string, string>;
@@ -22,7 +22,7 @@ interface Column {
   field: string;
   title: string;
   placeholder?: string;
-  type?: 'number' | 'password' | 'select';
+  type?: 'number' | 'password' | 'select' | 'checkbox';
   className?: string;
 }
 
@@ -54,14 +54,19 @@ const SECTIONS: { section: Section; title: string; description: string; columns:
   {
     section: 'processes',
     title: '프로세스',
-    description: 'match 는 ps 의 명령줄에 대한 정규식입니다. 로그 파일 · 시작 스크립트는 셸 특수문자가 없는 절대 경로로 적습니다. 중지는 찾은 PID 에 SIGTERM 을 보냅니다.',
+    description:
+      'match 는 화면에 보여줄 프로세스를 찾는 ps 명령줄 정규식입니다. 로그 폴더 · 시작 스크립트는 셸 특수문자가 없는 절대 경로로 적습니다. ' +
+      '자동 재시작을 켜면 감시 이름(실행 파일 이름, 정확히 일치)과 감시 문자열(명령줄에 포함)로 찾은 프로세스가 없을 때 시작 스크립트를 실행합니다.',
     columns: [
       { field: 'id', title: 'id *' },
       { field: 'server', title: '서버 *', type: 'select' },
       { field: 'label', title: '표시 이름' },
       { field: 'match', title: 'match (정규식) *', placeholder: 'java .*app\\.jar', className: 'config-editor-col-wide' },
-      { field: 'logFile', title: '로그 파일', placeholder: '/opt/app/logs/app.log', className: 'config-editor-col-wide' },
+      { field: 'logDir', title: '로그 폴더', placeholder: '/opt/app/logs', className: 'config-editor-col-wide' },
       { field: 'startScript', title: '시작 스크립트', placeholder: '/opt/app/start.sh', className: 'config-editor-col-wide' },
+      { field: 'autoRestart', title: '자동 재시작', type: 'checkbox', className: 'config-editor-col-narrow' },
+      { field: 'watchName', title: '감시 이름', placeholder: 'java' },
+      { field: 'watchArgs', title: '감시 문자열', placeholder: '/opt/app/app.jar', className: 'config-editor-col-wide' },
     ],
   },
 ];
@@ -88,9 +93,31 @@ const toRows = (config: ProcessConfig): Record<Section, Row[]> => ({
     server: p.server,
     label: p.label ?? '',
     match: p.match,
-    logFile: p.logFile ?? '',
+    // 예전 설정(logFile: 로그 파일 하나)을 가져오면 그 파일이 있는 폴더를 쓴다.
+    logDir: p.logDir ?? (p as { logFile?: string }).logFile?.replace(/\/[^/]*$/, '') ?? '',
     startScript: p.startScript ?? '',
+    autoRestart: p.autoRestart ? 'true' : '',
+    watchName: p.watchName ?? '',
+    watchArgs: p.watchArgs ?? '',
   })),
+});
+
+/** 위쪽 주기 · 대기 시간 칸. 설정 필드 이름 → 입력칸 값 */
+type TimingField = 'pollIntervalMs' | 'watchIntervalMs' | 'restartDelayMs';
+const TIMING_FIELDS: { field: TimingField; title: string; fallback: number; help: string }[] = [
+  { field: 'pollIntervalMs', title: '상태 확인 주기(ms)', fallback: DEFAULT_POLL_INTERVAL_MS, help: '화면이 상태를 다시 읽는 간격' },
+  { field: 'watchIntervalMs', title: '자동 재시작 확인 주기(ms)', fallback: DEFAULT_WATCH_INTERVAL_MS, help: 'Go 서버가 감시 프로세스를 확인하는 간격' },
+  {
+    field: 'restartDelayMs',
+    title: '재시작 대기(ms)',
+    fallback: DEFAULT_RESTART_DELAY_MS,
+    help: '시작한 뒤 프로세스가 뜨기를 기다리는 시간. 이 시간 안에는 다시 자동 시작하지 않습니다',
+  },
+];
+const toTiming = (config: ProcessConfig): Record<TimingField, string> => ({
+  pollIntervalMs: config.pollIntervalMs?.toString() ?? '',
+  watchIntervalMs: config.watchIntervalMs?.toString() ?? '',
+  restartDelayMs: config.restartDelayMs?.toString() ?? '',
 });
 
 /** "servers[2].host: ..." → "서버 3번째 행 host: ..." */
@@ -99,7 +126,8 @@ const toRowMessage = (message: string) =>
 
 /** ⚙ 설정: 그룹 · 서버 · 프로세스를 추가 · 삭제 · 수정 · 정렬하고, JSON 파일로 가져오거나 내보내고, 서버에 저장한다. */
 const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) => {
-  const [pollInterval, setPollInterval] = useState(config.pollIntervalMs?.toString() ?? '');
+  /** 위쪽 숫자 칸 (빈 칸이면 기본값) */
+  const [timing, setTiming] = useState(() => toTiming(config));
   const [rows, setRows] = useState<Record<Section, Row[]>>(() => toRows(config));
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ kind: 'error' | 'info'; text: string } | null>(null);
@@ -124,7 +152,9 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) 
     const text = (value: string) => value.trim() || undefined;
     const number = (value: string) => (value.trim() === '' ? undefined : Number(value));
     return validateProcessConfig({
-      pollIntervalMs: number(pollInterval),
+      pollIntervalMs: number(timing.pollIntervalMs),
+      watchIntervalMs: number(timing.watchIntervalMs),
+      restartDelayMs: number(timing.restartDelayMs),
       groups: rows.groups.map(r => ({ slug: r.slug.trim(), name: r.name.trim() })),
       servers: rows.servers.map(r => ({
         id: r.id.trim(),
@@ -141,12 +171,16 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) 
         server: r.server,
         label: text(r.label),
         match: r.match.trim(),
-        logFile: text(r.logFile),
+        logDir: text(r.logDir),
         startScript: text(r.startScript),
+        autoRestart: r.autoRestart === 'true' || undefined,
+        watchName: text(r.watchName),
+        // 앞뒤 공백도 비교 대상일 수 있지만, 실수로 넣은 경우가 더 많으므로 잘라낸다.
+        watchArgs: text(r.watchArgs),
       })),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pollInterval, rows, savedServers]);
+  }, [timing, rows, savedServers]);
 
   // 검사 에러("servers[2].host: ...")에서 문제 칸("servers.2.host")을 뽑아 빨간 테두리로 표시한다.
   const errors = validation.ok ? [] : validation.errors;
@@ -191,7 +225,17 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) 
       const empty: Record<Section, Record<string, string>> = {
         groups: { slug: `${prefix}-${n}`, name: '' },
         servers: { id: `${prefix}-${n}`, group: prev.groups[0]?.slug ?? '', label: '', host: '', port: '', user: '', password: '' },
-        processes: { id: `${prefix}-${n}`, server: prev.servers[0]?.id ?? '', label: '', match: '', logFile: '', startScript: '' },
+        processes: {
+          id: `${prefix}-${n}`,
+          server: prev.servers[0]?.id ?? '',
+          label: '',
+          match: '',
+          logDir: '',
+          startScript: '',
+          autoRestart: '',
+          watchName: '',
+          watchArgs: '',
+        },
       };
       return { ...prev, [section]: [...prev[section], { key: String(nextRowKey++), ...empty[section] }] };
     });
@@ -217,7 +261,7 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) 
       return;
     }
     const next = imported as ProcessConfig;
-    setPollInterval(next.pollIntervalMs?.toString() ?? '');
+    setTiming(toTiming(next));
     setRows(toRows(next));
     setMessage({ kind: 'info', text: `${selected.name} 을(를) 불러왔습니다. 저장을 눌러야 반영됩니다.` });
   };
@@ -275,17 +319,22 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) 
         </header>
 
         <div className="config-editor-body">
-          <label className="config-editor-default">
-            상태 확인 주기(ms)
-            <input
-              className={inputClass('pollIntervalMs')}
-              type="number"
-              min={1000}
-              placeholder={String(DEFAULT_POLL_INTERVAL_MS)}
-              value={pollInterval}
-              onChange={e => setPollInterval(e.target.value)}
-            />
-          </label>
+          <div className="config-editor-defaults">
+            {TIMING_FIELDS.map(({ field, title, fallback, help }) => (
+              <label key={field} className="config-editor-default" title={`${help} (비우면 ${fallback})`}>
+                {title}
+                <input
+                  className={inputClass(field)}
+                  type="number"
+                  min={1000}
+                  step={1000}
+                  placeholder={String(fallback)}
+                  value={timing[field]}
+                  onChange={e => setTiming(prev => ({ ...prev, [field]: e.target.value }))}
+                />
+              </label>
+            ))}
+          </div>
 
           {SECTIONS.map(({ section, title, description, columns }) => (
             <section key={section} className="config-editor-section">
@@ -321,7 +370,14 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) 
                           updateRow(section, row.key, field, e.target.value);
                         return (
                           <td key={field} className={className}>
-                            {type === 'select' ? (
+                            {type === 'checkbox' ? (
+                              <input
+                                className={`config-editor-checkbox${invalidFields.has(`${section}.${i}.${field}`) ? ' config-editor-input-invalid' : ''}`}
+                                type="checkbox"
+                                checked={row[field] === 'true'}
+                                onChange={e => updateRow(section, row.key, field, e.target.checked ? 'true' : '')}
+                              />
+                            ) : type === 'select' ? (
                               <select className={fieldClass} value={row[field]} onChange={onChange}>
                                 {!selectOptions[field].includes(row[field]) && <option value={row[field]}>{row[field] || '선택'}</option>}
                                 {selectOptions[field].map(option => (
