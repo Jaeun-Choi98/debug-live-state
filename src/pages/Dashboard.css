@@ -34,13 +34,13 @@
   border-radius: 8px;
 }
 
-.endpoint-grid {
+.server-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(480px, 100%), 1fr));
   gap: 14px;
 }
 
-/* 왼쪽: 상태 사이드바, 오른쪽: 툴바 + 카드 그리드 */
+/* 왼쪽: 상태 사이드바, 오른쪽: 툴바 + 서버 카드 그리드 */
 .dashboard-layout {
   display: flex;
   align-items: flex-start;
@@ -59,21 +59,21 @@
   }
 }
 
-/* ── 그룹 (설정 파일의 group 필드) ───────────────────────── */
-.endpoint-group {
+/* ── 그룹 (/all 에서는 그룹마다 제목을 단다) ───────────────── */
+.server-group {
   scroll-margin-top: 68px;
 }
 
-.endpoint-group + .endpoint-group {
+.server-group + .server-group {
   margin-top: 28px;
 }
 
 /* 검색으로 그룹의 카드가 모두 숨겨지면 그룹 제목도 숨긴다. */
-.endpoint-group:not(:has(.endpoint-card)) {
+.server-group:not(:has(.server-card)) {
   display: none;
 }
 
-.endpoint-group-title {
+.server-group-title {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -85,11 +85,44 @@
   letter-spacing: 0.04em;
 }
 
-.endpoint-group-count {
+.server-group-count {
   padding: 0 7px;
   font-size: 0.7rem;
   line-height: 18px;
   color: var(--text-muted);
   background: var(--surface-2);
   border-radius: 9px;
+}
+
+.server-group-title a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.server-group-title a:hover {
+  color: var(--accent);
+}
+
+.dashboard-empty a {
+  color: var(--accent);
+}
+
+@media (max-width: 600px) {
+  .page {
+    padding: 20px 16px 40px;
+  }
+
+  .dashboard-toolbar-actions {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .dashboard-search {
+    flex: 1;
+    width: auto;
+  }
+}
+
+.dashboard-main .api-error {
+  margin: 0 0 12px;
 }

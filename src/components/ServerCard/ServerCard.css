@@ -1,0 +1,158 @@
+.server-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  /* 사이드바에서 이동했을 때 sticky 헤더(52px)에 가려지지 않게 한다. */
+  scroll-margin-top: 68px;
+}
+
+.server-card:focus {
+  outline: none;
+}
+
+.server-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.server-card-label {
+  overflow: hidden;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-card-host {
+  overflow: hidden;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-card-summary {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.server-card-error,
+.server-card-message {
+  padding: 6px 10px;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-radius: 4px;
+}
+
+.server-card-error,
+.server-card-message-error {
+  color: var(--error);
+  background: rgba(248, 81, 73, 0.1);
+}
+
+.server-card-message-info {
+  color: var(--success);
+  background: rgba(63, 185, 80, 0.1);
+}
+
+.server-card-placeholder {
+  font-size: 0.78rem;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+/* ── 프로세스 표 ──────────────────────────────────── */
+.server-card-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.server-card-table th {
+  padding: 4px 6px;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+}
+
+.server-card-table td {
+  padding: 6px;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--surface-2);
+}
+
+.server-card-table tr:last-child td {
+  border-bottom: none;
+}
+
+.server-card-row-error .server-card-process-name {
+  color: var(--error);
+}
+
+.server-card-process {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.server-card-process-name {
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-card-badge {
+  flex-shrink: 0;
+  padding: 0 5px;
+  font-size: 0.6rem;
+  color: var(--error);
+  letter-spacing: 0.05em;
+  border: 1px solid var(--error);
+  border-radius: 4px;
+}
+
+.server-card-mono {
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.server-card-num {
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.75rem;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.server-card-table th.server-card-num {
+  text-align: right;
+}
+
+.server-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.server-card-busy {
+  font-size: 0.72rem;
+  color: var(--accent);
+  white-space: nowrap;
+}

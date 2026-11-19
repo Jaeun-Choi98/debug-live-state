@@ -1,75 +1,167 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { DEFAULT_POLL_INTERVAL_MS, ValidationResult, validateEndpointsFile } from '../../config/schema';
-import { EndpointEntry, EndpointsFile } from '../../config/types';
+import { DEFAULT_POLL_INTERVAL_MS, validateProcessConfig } from '../../config/schema';
+import { ProcessConfig, ServerEntry } from '../../config/types';
 import './ConfigEditor.css';
 
 interface ConfigEditorProps {
-  file: EndpointsFile;
-  /** false 면 설정 API 가 없어 저장할 수 없다. (내보내기만 가능) */
-  editable: boolean;
+  config: ProcessConfig;
   /** 실패하면 에러를 던진다. */
-  onSave: (file: EndpointsFile) => Promise<void>;
+  onSave: (config: ProcessConfig) => Promise<void>;
   onClose: () => void;
 }
 
+type Section = 'groups' | 'servers' | 'processes';
+
 /**
- * 편집 중인 한 행. 입력칸 값을 문자열 그대로 들고 있다가 검사·저장할 때 변환한다.
+ * 편집 중인 한 행. 입력칸 값을 문자열 그대로 들고 있다가 검사 · 저장할 때 변환한다.
  * key 는 React 용이다. (id 는 편집되므로 key 로 쓸 수 없다)
  */
-type Row = Record<keyof EndpointEntry, string> & { key: number };
+type Row = Record<string, string>;
+
+interface Column {
+  field: string;
+  title: string;
+  placeholder?: string;
+  type?: 'number' | 'password' | 'select';
+  className?: string;
+}
+
+/** 표 세 개의 열 정의. 서버의 group, 프로세스의 server 는 위 표에 있는 값 중에서 고른다. */
+const SECTIONS: { section: Section; title: string; description: string; columns: Column[] }[] = [
+  {
+    section: 'groups',
+    title: '그룹',
+    description: 'slug 는 화면 주소(/uw)로, 이름은 상단 탭에 쓰입니다.',
+    columns: [
+      { field: 'slug', title: 'slug *', placeholder: 'uw' },
+      { field: 'name', title: '이름 *', placeholder: '의왕' },
+    ],
+  },
+  {
+    section: 'servers',
+    title: '서버',
+    description: 'SSH 비밀번호는 서버 파일에만 저장되고 화면에는 다시 보이지 않습니다. 바꿀 때만 입력하세요. host · port · user 를 바꾸면 다시 입력해야 합니다.',
+    columns: [
+      { field: 'id', title: 'id *' },
+      { field: 'group', title: '그룹 *', type: 'select' },
+      { field: 'label', title: '표시 이름' },
+      { field: 'host', title: 'host *', placeholder: '10.0.0.11', className: 'config-editor-col-wide' },
+      { field: 'port', title: 'port', placeholder: '22', type: 'number', className: 'config-editor-col-narrow' },
+      { field: 'user', title: 'user *', placeholder: 'ops' },
+      { field: 'password', title: '비밀번호 *', type: 'password' },
+    ],
+  },
+  {
+    section: 'processes',
+    title: '프로세스',
+    description: 'match 는 ps 의 명령줄에 대한 정규식입니다. 로그 파일 · 시작 스크립트는 셸 특수문자가 없는 절대 경로로 적습니다. 중지는 찾은 PID 에 SIGTERM 을 보냅니다.',
+    columns: [
+      { field: 'id', title: 'id *' },
+      { field: 'server', title: '서버 *', type: 'select' },
+      { field: 'label', title: '표시 이름' },
+      { field: 'match', title: 'match (정규식) *', placeholder: 'java .*app\\.jar', className: 'config-editor-col-wide' },
+      { field: 'logFile', title: '로그 파일', placeholder: '/opt/app/logs/app.log', className: 'config-editor-col-wide' },
+      { field: 'startScript', title: '시작 스크립트', placeholder: '/opt/app/start.sh', className: 'config-editor-col-wide' },
+    ],
+  },
+];
+
+const SECTION_TITLE: Record<Section, string> = { groups: '그룹', servers: '서버', processes: '프로세스' };
 
 let nextRowKey = 0;
 
-const toRows = (file: EndpointsFile): Row[] =>
-  file.endpoints.map(e => ({
-    key: nextRowKey++,
-    id: e.id,
-    group: e.group ?? '',
-    label: e.label ?? '',
-    url: e.url,
-    pollIntervalMs: e.pollIntervalMs?.toString() ?? '',
-  }));
+const toRows = (config: ProcessConfig): Record<Section, Row[]> => ({
+  groups: config.groups.map(g => ({ key: String(nextRowKey++), slug: g.slug, name: g.name })),
+  servers: config.servers.map(s => ({
+    key: String(nextRowKey++),
+    id: s.id,
+    group: s.group,
+    label: s.label ?? '',
+    host: s.host,
+    port: s.port?.toString() ?? '',
+    user: s.user,
+    password: s.password ?? '',
+  })),
+  processes: config.processes.map(p => ({
+    key: String(nextRowKey++),
+    id: p.id,
+    server: p.server,
+    label: p.label ?? '',
+    match: p.match,
+    logFile: p.logFile ?? '',
+    startScript: p.startScript ?? '',
+  })),
+});
 
-/** "endpoints[2].url: ..." → "3번째 행 url: ..." */
+/** "servers[2].host: ..." → "서버 3번째 행 host: ..." */
 const toRowMessage = (message: string) =>
-  message.replace(/^endpoints\[(\d+)\]\.?/, (_, i: string) => `${Number(i) + 1}번째 행 `);
+  message.replace(/^(groups|servers|processes)\[(\d+)\]\.?/, (_, section: Section, i: string) => `${SECTION_TITLE[section]} ${Number(i) + 1}번째 행 `);
 
-/** ⚙ 설정: 엔드포인트를 추가·삭제·수정·정렬하고, JSON 파일로 가져오거나 내보내고, 서버에 저장한다. */
-const ConfigEditor: React.FC<ConfigEditorProps> = ({ file, editable, onSave, onClose }) => {
-  const [defaultInterval, setDefaultInterval] = useState(file.pollIntervalMs?.toString() ?? '');
-  const [rows, setRows] = useState<Row[]>(() => toRows(file));
+/** ⚙ 설정: 그룹 · 서버 · 프로세스를 추가 · 삭제 · 수정 · 정렬하고, JSON 파일로 가져오거나 내보내고, 서버에 저장한다. */
+const ConfigEditor: React.FC<ConfigEditorProps> = ({ config, onSave, onClose }) => {
+  const [pollInterval, setPollInterval] = useState(config.pollIntervalMs?.toString() ?? '');
+  const [rows, setRows] = useState<Record<Section, Row[]>>(() => toRows(config));
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ kind: 'error' | 'info'; text: string } | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
+
+  /** 서버에 저장되어 있는 서버 정보 (비밀번호가 저장되어 있는지 판단용) */
+  const savedServers = useMemo(() => new Map(config.servers.map(s => [s.id, s])), [config.servers]);
+  /** 비밀번호를 비워 둬도 서버가 기존 비밀번호를 유지하는지. (같은 id 에 host · port · user 가 그대로일 때만) */
+  const keepsPassword = (row: Row) => {
+    const saved: ServerEntry | undefined = savedServers.get(row.id.trim());
+    return Boolean(
+      saved?.hasPassword &&
+        saved.host === row.host.trim() &&
+        (saved.port ?? 22) === (Number(row.port) || 22) &&
+        saved.user === row.user.trim()
+    );
+  };
 
   // 입력칸 값을 설정 파일 형태로 바꿔 검사한다.
   // 빈 칸은 생략(기본값 사용)하고, 숫자가 아닌 값은 NaN 으로 두어 검사에 걸리게 한다.
   const validation = useMemo(() => {
     const text = (value: string) => value.trim() || undefined;
     const number = (value: string) => (value.trim() === '' ? undefined : Number(value));
-    return validateEndpointsFile({
-      pollIntervalMs: number(defaultInterval),
-      endpoints: rows.map(row => ({
-        id: row.id.trim(),
-        group: text(row.group),
-        label: text(row.label),
-        url: row.url.trim(),
-        pollIntervalMs: number(row.pollIntervalMs),
+    return validateProcessConfig({
+      pollIntervalMs: number(pollInterval),
+      groups: rows.groups.map(r => ({ slug: r.slug.trim(), name: r.name.trim() })),
+      servers: rows.servers.map(r => ({
+        id: r.id.trim(),
+        group: r.group,
+        label: text(r.label),
+        host: r.host.trim(),
+        port: number(r.port),
+        user: r.user.trim(),
+        password: r.password || undefined,
+        hasPassword: keepsPassword(r) || undefined,
+      })),
+      processes: rows.processes.map(r => ({
+        id: r.id.trim(),
+        server: r.server,
+        label: text(r.label),
+        match: r.match.trim(),
+        logFile: text(r.logFile),
+        startScript: text(r.startScript),
       })),
     });
-  }, [defaultInterval, rows]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pollInterval, rows, savedServers]);
 
-  // 검사 에러("endpoints[2].url: ...")에서 문제 칸("2.url")을 뽑아 빨간 테두리로 표시한다.
+  // 검사 에러("servers[2].host: ...")에서 문제 칸("servers.2.host")을 뽑아 빨간 테두리로 표시한다.
   const errors = validation.ok ? [] : validation.errors;
   const invalidFields = new Set(
     errors.map(error => {
-      const match = error.match(/^endpoints\[(\d+)\]\.(\w+)/);
-      return match ? `${match[1]}.${match[2]}` : error.split(':')[0];
+      const match = error.match(/^(\w+)\[(\d+)\]\.(\w+)/);
+      return match ? `${match[1]}.${match[2]}.${match[3]}` : error.split(':')[0];
     })
   );
   const inputClass = (field: string) =>
     `input config-editor-input${invalidFields.has(field) ? ' config-editor-input-invalid' : ''}`;
-  const groupNames = Array.from(new Set(rows.map(row => row.group.trim()).filter(Boolean)));
+  const selectOptions: Record<string, string[]> = {
+    group: rows.groups.map(r => r.slug.trim()).filter(Boolean),
+    server: rows.servers.map(r => r.id.trim()).filter(Boolean),
+  };
 
   useEffect(() => {
     const closeOnEscape = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -77,22 +169,31 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ file, editable, onSave, onC
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [onClose]);
 
-  const updateRow = (key: number, field: keyof EndpointEntry, value: string) =>
-    setRows(prev => prev.map(row => (row.key === key ? { ...row, [field]: value } : row)));
+  const updateRow = (section: Section, key: string, field: string, value: string) =>
+    setRows(prev => ({ ...prev, [section]: prev[section].map(row => (row.key === key ? { ...row, [field]: value } : row)) }));
 
-  const moveRow = (from: number, to: number) =>
+  const moveRow = (section: Section, from: number, to: number) =>
     setRows(prev => {
-      const next = [...prev];
+      const next = [...prev[section]];
       [next[from], next[to]] = [next[to], next[from]];
-      return next;
+      return { ...prev, [section]: next };
     });
 
-  const addRow = () =>
+  const addRow = (section: Section) =>
     setRows(prev => {
-      const ids = new Set(prev.map(row => row.id));
-      let n = prev.length + 1;
-      while (ids.has(`endpoint-${n}`)) n++;
-      return [...prev, { key: nextRowKey++, id: `endpoint-${n}`, group: '', label: '', url: '', pollIntervalMs: '' }];
+      // 비어 있는 이름(group-3, server-3 ...)을 찾아 id 로 쓴다.
+      const prefix = { groups: 'group', servers: 'server', processes: 'process' }[section];
+      const idField = section === 'groups' ? 'slug' : 'id';
+      const used = new Set(prev[section].map(row => row[idField]));
+      let n = prev[section].length + 1;
+      while (used.has(`${prefix}-${n}`)) n++;
+
+      const empty: Record<Section, Record<string, string>> = {
+        groups: { slug: `${prefix}-${n}`, name: '' },
+        servers: { id: `${prefix}-${n}`, group: prev.groups[0]?.slug ?? '', label: '', host: '', port: '', user: '', password: '' },
+        processes: { id: `${prefix}-${n}`, server: prev.servers[0]?.id ?? '', label: '', match: '', logFile: '', startScript: '' },
+      };
+      return { ...prev, [section]: [...prev[section], { key: String(nextRowKey++), ...empty[section] }] };
     });
 
   /** JSON 파일을 편집 화면으로 불러온다. 저장을 눌러야 반영된다. */
@@ -101,28 +202,37 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ file, editable, onSave, onC
     e.target.value = ''; // 같은 파일을 다시 골라도 change 가 발생하도록
     if (!selected) return;
 
-    let result: ValidationResult;
+    // 내보내기 파일에는 비밀번호가 없으므로, 비밀번호 누락은 막지 않고 불러온 뒤 표에서 빨간 칸으로 보여준다.
+    let imported: unknown;
+    let blocking: string[];
     try {
-      result = validateEndpointsFile(JSON.parse(await selected.text()));
+      imported = JSON.parse(await selected.text());
+      const result = validateProcessConfig(imported);
+      blocking = result.ok ? [] : result.errors.filter(error => !error.includes('.password:'));
     } catch (err) {
-      result = { ok: false, errors: [`JSON 형식이 아닙니다: ${err instanceof Error ? err.message : String(err)}`] };
+      blocking = [`JSON 형식이 아닙니다: ${err instanceof Error ? err.message : String(err)}`];
     }
-    if (!result.ok) {
-      setMessage({ kind: 'error', text: `가져오지 못했습니다 (${selected.name}):\n${result.errors.map(toRowMessage).join('\n')}` });
+    if (blocking.length > 0) {
+      setMessage({ kind: 'error', text: `가져오지 못했습니다 (${selected.name}):\n${blocking.map(toRowMessage).join('\n')}` });
       return;
     }
-    setDefaultInterval(result.file.pollIntervalMs?.toString() ?? '');
-    setRows(toRows(result.file));
+    const next = imported as ProcessConfig;
+    setPollInterval(next.pollIntervalMs?.toString() ?? '');
+    setRows(toRows(next));
     setMessage({ kind: 'info', text: `${selected.name} 을(를) 불러왔습니다. 저장을 눌러야 반영됩니다.` });
   };
 
-  /** 편집 중인 내용을 endpoints.json 으로 내려받는다. */
+  /** 편집 중인 내용을 processes.json 으로 내려받는다. 비밀번호는 넣지 않는다. */
   const handleExport = () => {
     if (!validation.ok) return;
-    const blob = new Blob([JSON.stringify(validation.file, null, 2) + '\n'], { type: 'application/json' });
+    const exported = {
+      ...validation.config,
+      servers: validation.config.servers.map(({ password, hasPassword, ...server }) => server),
+    };
+    const blob = new Blob([JSON.stringify(exported, null, 2) + '\n'], { type: 'application/json' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = 'endpoints.json';
+    link.download = 'processes.json';
     link.click();
     URL.revokeObjectURL(link.href);
   };
@@ -132,7 +242,7 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ file, editable, onSave, onC
     setSaving(true);
     setMessage(null);
     try {
-      await onSave(validation.file);
+      await onSave(validation.config);
       onClose();
     } catch (err) {
       setMessage({ kind: 'error', text: `저장하지 못했습니다: ${err instanceof Error ? err.message : String(err)}` });
@@ -154,7 +264,7 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ file, editable, onSave, onC
               className="btn btn-secondary"
               onClick={handleExport}
               disabled={!validation.ok}
-              title="편집 중인 내용을 endpoints.json 으로 내려받습니다"
+              title="편집 중인 내용을 processes.json 으로 내려받습니다 (비밀번호 제외)"
             >
               내보내기
             </button>
@@ -164,110 +274,98 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ file, editable, onSave, onC
           </div>
         </header>
 
-        {!editable && (
-          <div className="config-editor-notice">
-            설정 API(<code>/api/config</code>)가 없는 환경이라 저장할 수 없습니다. 내보내기로 받은 파일로{' '}
-            <code>public/config/endpoints.json</code> 을 교체하세요.
-          </div>
-        )}
-
         <div className="config-editor-body">
           <label className="config-editor-default">
-            기본 폴링 주기(ms)
+            상태 확인 주기(ms)
             <input
               className={inputClass('pollIntervalMs')}
               type="number"
-              min={1}
+              min={1000}
               placeholder={String(DEFAULT_POLL_INTERVAL_MS)}
-              value={defaultInterval}
-              onChange={e => setDefaultInterval(e.target.value)}
+              value={pollInterval}
+              onChange={e => setPollInterval(e.target.value)}
             />
           </label>
 
-          <datalist id="config-editor-groups">
-            {groupNames.map(name => (
-              <option key={name} value={name} />
-            ))}
-          </datalist>
+          {SECTIONS.map(({ section, title, description, columns }) => (
+            <section key={section} className="config-editor-section">
+              <h3 className="config-editor-section-title">{title}</h3>
+              <p className="config-editor-section-description">{description}</p>
 
-          <table className="config-editor-table">
-            <thead>
-              <tr>
-                <th className="config-editor-col-order">순서</th>
-                <th>id *</th>
-                <th>그룹</th>
-                <th>표시 이름</th>
-                <th className="config-editor-col-url">URL *</th>
-                <th className="config-editor-col-interval">주기(ms)</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, i) => (
-                <tr key={row.key}>
-                  <td className="config-editor-col-order">
-                    <button className="btn-icon" onClick={() => moveRow(i, i - 1)} disabled={i === 0} title="위로">
-                      ▲
-                    </button>
-                    <button className="btn-icon" onClick={() => moveRow(i, i + 1)} disabled={i === rows.length - 1} title="아래로">
-                      ▼
-                    </button>
-                  </td>
-                  <td>
-                    <input className={inputClass(`${i}.id`)} value={row.id} onChange={e => updateRow(row.key, 'id', e.target.value)} />
-                  </td>
-                  <td>
-                    <input
-                      className={inputClass(`${i}.group`)}
-                      list="config-editor-groups"
-                      placeholder="미분류"
-                      value={row.group}
-                      onChange={e => updateRow(row.key, 'group', e.target.value)}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      className={inputClass(`${i}.label`)}
-                      placeholder={row.id}
-                      value={row.label}
-                      onChange={e => updateRow(row.key, 'label', e.target.value)}
-                    />
-                  </td>
-                  <td className="config-editor-col-url">
-                    <input
-                      className={inputClass(`${i}.url`)}
-                      placeholder="http://host:port/path"
-                      value={row.url}
-                      onChange={e => updateRow(row.key, 'url', e.target.value)}
-                    />
-                  </td>
-                  <td className="config-editor-col-interval">
-                    <input
-                      className={inputClass(`${i}.pollIntervalMs`)}
-                      type="number"
-                      min={1}
-                      placeholder="기본값"
-                      value={row.pollIntervalMs}
-                      onChange={e => updateRow(row.key, 'pollIntervalMs', e.target.value)}
-                    />
-                  </td>
-                  <td>
-                    <button
-                      className="btn-icon config-editor-remove"
-                      onClick={() => setRows(prev => prev.filter(r => r.key !== row.key))}
-                      title="삭제"
-                    >
-                      ✕
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+              <table className="config-editor-table">
+                <thead>
+                  <tr>
+                    <th className="config-editor-col-order">순서</th>
+                    {columns.map(column => (
+                      <th key={column.field} className={column.className}>
+                        {column.title}
+                      </th>
+                    ))}
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows[section].map((row, i) => (
+                    <tr key={row.key}>
+                      <td className="config-editor-col-order">
+                        <button className="btn-icon" onClick={() => moveRow(section, i, i - 1)} disabled={i === 0} title="위로">
+                          ▲
+                        </button>
+                        <button className="btn-icon" onClick={() => moveRow(section, i, i + 1)} disabled={i === rows[section].length - 1} title="아래로">
+                          ▼
+                        </button>
+                      </td>
+                      {columns.map(({ field, type, placeholder, className }) => {
+                        const fieldClass = inputClass(`${section}.${i}.${field}`);
+                        const onChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+                          updateRow(section, row.key, field, e.target.value);
+                        return (
+                          <td key={field} className={className}>
+                            {type === 'select' ? (
+                              <select className={fieldClass} value={row[field]} onChange={onChange}>
+                                {!selectOptions[field].includes(row[field]) && <option value={row[field]}>{row[field] || '선택'}</option>}
+                                {selectOptions[field].map(option => (
+                                  <option key={option} value={option}>
+                                    {option}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <input
+                                className={fieldClass}
+                                type={type ?? 'text'}
+                                autoComplete={type === 'password' ? 'new-password' : 'off'}
+                                placeholder={
+                                  type === 'password' ? (keepsPassword(row) ? '저장됨 (바꿀 때만 입력)' : '입력 필요')
+                                  : field === 'label' ? row.id
+                                  : placeholder
+                                }
+                                value={row[field]}
+                                onChange={onChange}
+                              />
+                            )}
+                          </td>
+                        );
+                      })}
+                      <td>
+                        <button
+                          className="btn-icon config-editor-remove"
+                          onClick={() => setRows(prev => ({ ...prev, [section]: prev[section].filter(r => r.key !== row.key) }))}
+                          title="삭제"
+                        >
+                          ✕
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
 
-          <button className="btn btn-secondary config-editor-add" onClick={addRow}>
-            + 엔드포인트 추가
-          </button>
+              <button className="btn btn-secondary config-editor-add" onClick={() => addRow(section)}>
+                + {title} 추가
+              </button>
+            </section>
+          ))}
         </div>
 
         <footer className="config-editor-footer">
@@ -285,7 +383,7 @@ const ConfigEditor: React.FC<ConfigEditorProps> = ({ file, editable, onSave, onC
             <button className="btn btn-secondary" onClick={onClose}>
               취소
             </button>
-            <button className="btn btn-primary" onClick={handleSave} disabled={!editable || !validation.ok || saving}>
+            <button className="btn btn-primary" onClick={handleSave} disabled={!validation.ok || saving}>
               {saving ? '저장 중...' : '저장'}
             </button>
           </div>

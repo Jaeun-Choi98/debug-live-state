@@ -1,6 +1,6 @@
 {
-  "short_name": "Debug GUI",
-  "name": "Monitoring Debug GUI",
+  "short_name": "Process Mgmt",
+  "name": "Process Management",
   "icons": [],
   "start_url": ".",
   "display": "standalone",

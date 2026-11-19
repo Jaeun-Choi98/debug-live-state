@@ -1,0 +1,268 @@
+package processes
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path"
+	"path/filepath"
+	"regexp"
+	"sync"
+)
+
+// Config 는 화면의 ⚙ 설정에서 편집하는 설정 파일(processes.json)의 구조. 프론트의 src/config/types.ts 와 맞춘다.
+//
+//	그룹(groups) ─┬─ 서버(servers, group = 그룹 slug) ─┬─ 프로세스(processes, server = 서버 id)
+type Config struct {
+	PollIntervalMs int       `json:"pollIntervalMs,omitempty"`
+	Groups         []Group   `json:"groups"`
+	Servers        []Server  `json:"servers"`
+	Processes      []Process `json:"processes"`
+}
+
+type Group struct {
+	// URL 경로 (/uw). 소문자 · 숫자 · '-' 만 쓴다.
+	Slug string `json:"slug"`
+	// 화면 표시 이름 (의왕)
+	Name string `json:"name"`
+}
+
+type Server struct {
+	ID    string `json:"id"`
+	Group string `json:"group"`
+	Label string `json:"label,omitempty"`
+	Host  string `json:"host"`
+	// 0 이면 22
+	Port int    `json:"port,omitempty"`
+	User string `json:"user"`
+	// 쓰기 전용. 파일에만 저장하고 조회 API 에는 내려주지 않는다. 저장할 때 비워 두면 기존 비밀번호를 유지한다.
+	Password string `json:"password,omitempty"`
+	// 조회 전용. 비밀번호가 저장되어 있으면 true. (저장 요청에 들어와도 무시한다)
+	HasPassword bool `json:"hasPassword,omitempty"`
+}
+
+type Process struct {
+	ID     string `json:"id"`
+	Server string `json:"server"`
+	Label  string `json:"label,omitempty"`
+	// ps 의 명령줄(args)에 대한 정규식. 일치하는 프로세스를 이 항목의 실행 인스턴스로 본다.
+	Match string `json:"match"`
+	// tail 로 보여줄 로그 파일의 절대 경로
+	LogFile string `json:"logFile,omitempty"`
+	// 시작 · 재시작 때 실행할 스크립트의 절대 경로 (인자 없이 실행)
+	StartScript string `json:"startScript,omitempty"`
+}
+
+func (s Server) addr() string {
+	port := s.Port
+	if port == 0 {
+		port = 22
+	}
+	return fmt.Sprintf("%s:%d", s.Host, port)
+}
+
+// 원격 명령에 그대로 들어가므로 따옴표 · 공백 · $ 같은 셸 특수문자를 허용하지 않는다.
+var (
+	slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+	hostPattern = regexp.MustCompile(`^[A-Za-z0-9.:-]+$`)
+	pathPattern = regexp.MustCompile(`^/[A-Za-z0-9._/-]+$`)
+	// 화면 · 서버의 다른 경로와 겹치는 slug
+	reservedSlugs = map[string]bool{"all": true, "api": true, "config": true, "static": true, "log-config": true}
+)
+
+// Validate 는 저장 전에 설정을 검사하고, 문제를 하나에서 멈추지 않고 모두 모아서 돌려준다.
+// 에러는 "servers[2].host: ..." 형식이다. 프론트(src/config/schema.ts)도 같은 규칙으로 먼저 검사한다.
+func (c *Config) Validate() error {
+	var errs []error
+	add := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
+
+	if c.PollIntervalMs != 0 && c.PollIntervalMs < 1000 {
+		add("pollIntervalMs: 1000 이상이어야 합니다")
+	}
+	if c.Groups == nil || c.Servers == nil || c.Processes == nil {
+		add("groups, servers, processes: 배열이 필요합니다")
+	}
+
+	slugs := map[string]bool{}
+	for i, g := range c.Groups {
+		at := fmt.Sprintf("groups[%d]", i)
+		switch {
+		case !slugPattern.MatchString(g.Slug):
+			add("%s.slug: 영문 소문자 · 숫자 · '-' 로 써야 합니다", at)
+		case reservedSlugs[g.Slug]:
+			add("%s.slug: '%s' 는 쓸 수 없습니다", at, g.Slug)
+		case slugs[g.Slug]:
+			add("%s.slug: '%s' 가 중복됩니다", at, g.Slug)
+		}
+		slugs[g.Slug] = true
+		if g.Name == "" {
+			add("%s.name: 비어 있습니다", at)
+		}
+	}
+
+	serverIDs := map[string]bool{}
+	for i, s := range c.Servers {
+		at := fmt.Sprintf("servers[%d]", i)
+		switch {
+		case s.ID == "":
+			add("%s.id: 비어 있습니다", at)
+		case serverIDs[s.ID]:
+			add("%s.id: '%s' 가 중복됩니다", at, s.ID)
+		}
+		serverIDs[s.ID] = true
+		if !slugs[s.Group] {
+			add("%s.group: 등록된 그룹이 아닙니다", at)
+		}
+		if !hostPattern.MatchString(s.Host) {
+			add("%s.host: 호스트 이름이나 IP 가 필요합니다", at)
+		}
+		if s.Port < 0 || s.Port > 65535 {
+			add("%s.port: 1~65535 사이여야 합니다", at)
+		}
+		if s.User == "" {
+			add("%s.user: 비어 있습니다", at)
+		}
+		if s.Password == "" {
+			add("%s.password: 비어 있습니다", at)
+		}
+	}
+
+	processIDs := map[string]bool{}
+	for i, p := range c.Processes {
+		at := fmt.Sprintf("processes[%d]", i)
+		switch {
+		case p.ID == "":
+			add("%s.id: 비어 있습니다", at)
+		case processIDs[p.ID]:
+			add("%s.id: '%s' 가 중복됩니다", at, p.ID)
+		}
+		processIDs[p.ID] = true
+		if !serverIDs[p.Server] {
+			add("%s.server: 등록된 서버가 아닙니다", at)
+		}
+		if _, err := regexp.Compile(p.Match); p.Match == "" || err != nil {
+			add("%s.match: 올바른 정규식이 필요합니다", at)
+		}
+		for field, value := range map[string]string{"logFile": p.LogFile, "startScript": p.StartScript} {
+			// path.Clean 과 다르면 '..', '//' 등이 들어 있는 경로다.
+			if value != "" && (!pathPattern.MatchString(value) || path.Clean(value) != value) {
+				add("%s.%s: 영문 · 숫자 · . _ - / 로 된 절대 경로가 필요합니다", at, field)
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// Store 는 설정 파일을 읽고 쓴다. 파일에 SSH 비밀번호가 들어 있으므로 0600 으로 저장한다.
+// 파일을 직접 고쳐도 바로 반영되도록 매번 파일에서 읽는다.
+type Store struct {
+	mu   sync.Mutex
+	path string
+}
+
+func NewStore(path string) *Store {
+	return &Store{path: path}
+}
+
+// ErrInvalid 는 저장 요청 본문이 잘못된 경우의 에러. ( 400 으로 응답 )
+var ErrInvalid = errors.New("invalid processes config")
+
+// Load 는 비밀번호를 포함한 설정을 돌려준다. 파일이 없으면 빈 설정이다.
+func (s *Store) Load() (*Config, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	data, err := os.ReadFile(s.path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return &Config{Groups: []Group{}, Servers: []Server{}, Processes: []Process{}}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var c Config
+	if err := json.Unmarshal(data, &c); err != nil {
+		return nil, fmt.Errorf("%s: %w", s.path, err)
+	}
+	return &c, nil
+}
+
+// Public 은 화면에 내려줄 설정이다. 비밀번호를 지우고 저장 여부(hasPassword)만 알려준다.
+func Public(c *Config) *Config {
+	out := *c
+	out.Servers = make([]Server, len(c.Servers))
+	for i, server := range c.Servers {
+		server.HasPassword = server.Password != ""
+		server.Password = ""
+		out.Servers[i] = server
+	}
+	return &out
+}
+
+// Save 는 body 를 검사한 뒤 저장하고, 저장한 설정(비밀번호 포함)을 돌려준다.
+//
+// 비밀번호를 비워 둔 서버는 기존 비밀번호를 유지한다. 단, 접속 대상(host · port · user)이 바뀌었으면 유지하지 않는다.
+// (화면에 접근한 사람이 host 만 바꿔서 저장된 비밀번호를 다른 서버로 보내게 할 수 없도록)
+func (s *Store) Save(body []byte) (*Config, error) {
+	var next Config
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&next); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+
+	current, err := s.Load()
+	if err != nil {
+		return nil, err
+	}
+	saved := map[string]Server{}
+	for _, server := range current.Servers {
+		saved[server.ID] = server
+	}
+	for i, server := range next.Servers {
+		old, ok := saved[server.ID]
+		if server.Password == "" && ok && old.addr() == server.addr() && old.User == server.User {
+			next.Servers[i].Password = old.Password
+		}
+		next.Servers[i].HasPassword = false
+	}
+
+	if err := next.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+
+	data, err := json.MarshalIndent(next, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := writeFileAtomic(s.path, append(data, '\n')); err != nil {
+		return nil, err
+	}
+	return &next, nil
+}
+
+// writeFileAtomic 은 쓰는 도중 실패해도 기존 파일이 깨지지 않도록 임시 파일(0600)에 쓴 뒤 바꿔치기한다.
+func writeFileAtomic(target string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(target), ".processes-*.json")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // rename 에 성공하면 이미 없으므로 무시된다.
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), target)
+}

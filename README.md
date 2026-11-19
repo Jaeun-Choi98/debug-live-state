@@ -1,36 +1,50 @@
-# Debug GUI
+# Process Management
 
-여러 모니터링 백엔드의 상태 객체를 실시간으로 확인하기 위한 디버깅용 대시보드입니다.
-GET 엔드포인트 목록(`endpoints.json`)을 등록하면, 화면이 주기적으로 각 엔드포인트를
-호출해 응답 JSON 전체를 그대로 트리 뷰로 보여줍니다. 엔드포인트는 화면의 ⚙ 설정에서
-추가/수정/삭제하고, JSON 파일로 가져오기/내보내기 할 수 있습니다.
+여러 서버에 SSH 로 접속해 등록한 프로세스의 실행 상태(PID · CPU · MEM · 실행 시간)를 확인하고,
+로그 파일을 보고, 시작 · 중지 · 재시작하는 관리 화면입니다. 서버는 사용자가 만든 그룹(의왕, 광명 ...)으로
+묶어서 보여주고, 그룹마다 주소가 나뉩니다. (`/all` 전체, `/uw` 의왕만)
+
+```
+브라우저 ──HTTP──▶ Go 서버 (/api) ──SSH (비밀번호)──▶ 각 서버: ps / tail / kill / 시작 스크립트
+```
 
 ## 설계 원칙
 
-- **읽기 전용 / GET only**: 특정 필드만 골라오는 API가 아니라, 객체 전체를 반환하는
-  디버그용 GET API만 등록합니다. 백엔드마다 응답 구조가 달라도 동일한 UI로 일관되게
-  볼 수 있도록 하기 위함입니다.
-- **설정은 서버 파일에 저장**: ⚙ 설정에서 수정한 내용은 `PUT /api/config` 로 서버 파일에
-  저장되어 모든 사용자에게 반영됩니다. 배포에서는 Go 서버가, `npm start` 에서는 개발 서버
-  (`src/setupProxy.js`)가 이 API를 제공합니다.
-- **엔드포인트별 독립 폴링**: 각 카드가 자신의 주기로 독립적으로 폴링합니다(느린 백엔드가
-  다른 카드에 영향을 주지 않음). 응답이 오기 전에는 다음 요청을 쌓지 않습니다.
-- **탐색 기능**: 상단 검색창에 key/value를 입력하면, 해당 값이 없는 카드는 숨겨지고,
-  일치하는 값은 하이라이트되며 중첩된 위치까지 자동으로 펼쳐집니다. curl로는 찾기 힘든
-  크고 불규칙한 JSON에서 원하는 값을 빠르게 찾기 위한 용도입니다.
+- **정해진 명령만 실행**: 설정에는 명령을 적지 않고, 프로세스를 찾을 정규식(`match`)과 로그 파일 ·
+  시작 스크립트 경로만 적습니다. Go 서버가 `ps`, `tail`, `kill -TERM <PID>`, `nohup <스크립트>` 만 만들어
+  실행하며, 경로는 셸 특수문자가 없는 절대 경로만 허용합니다.
+- **비밀번호는 쓰기 전용**: ⚙ 설정에서 입력한 SSH 비밀번호는 Go 서버의 설정 파일(0600)에만 저장되고,
+  조회 API 는 `hasPassword` 만 돌려줍니다. 비워 두고 저장하면 기존 비밀번호를 유지하되, host · port · user 가
+  바뀌면 다시 입력해야 합니다. (저장된 비밀번호를 다른 서버로 보낼 수 없도록)
+- **호스트 키 확인**: 처음 접속한 서버의 호스트 키를 `known_hosts` 에 기록하고, 이후 키가 다르면 접속하지
+  않습니다. 서버를 재설치했다면 해당 줄을 지우세요.
+- **서버 부하 제한**: 상태 확인은 서버당 `ps` 한 번으로 그 서버의 모든 프로세스를 판단하고, 여러 사람이 보고
+  있어도 서버마다 2초에 한 번만 실행합니다. SSH 연결은 열어 두고 재사용합니다.
+- **경로 라우팅**: `/all` 은 전체 그룹, `/<그룹 slug>` 는 그 그룹만 보여주고 상태도 그 그룹만 확인합니다.
 
-## 설정 (`endpoints.json`)
+> ⚠ 로그인이 없습니다. 화면에 접속할 수 있는 사람은 누구나 설정을 바꾸고 프로세스를 중지할 수 있으므로
+> 내부망에서만 여세요. 상태를 바꾸는 요청은 `Content-Type: application/json` 을 요구해 다른 사이트를 통한
+> 요청(CSRF)만 막습니다. 제어 요청은 요청한 IP 와 함께 서버 로그에 남습니다.
+
+## 설정 (`processes.json`)
+
+⚙ 설정 화면에서 편집하며, Go 서버의 `env.ini` `[PROCESSES] FILE` (기본 `./data/processes.json`)에 저장됩니다.
 
 ```json
 {
-  "pollIntervalMs": 3000,
-  "endpoints": [
+  "pollIntervalMs": 5000,
+  "groups": [{ "slug": "uw", "name": "의왕" }],
+  "servers": [
+    { "id": "uw-app1", "group": "uw", "label": "의왕 APP 1", "host": "10.0.0.11", "port": 22, "user": "ops", "password": "..." }
+  ],
+  "processes": [
     {
-      "id": "order-engine",
-      "group": "Trading",
-      "label": "Order Engine State",
-      "url": "http://localhost:8081/debug/state",
-      "pollIntervalMs": 1000
+      "id": "shelter",
+      "server": "uw-app1",
+      "label": "Shelter",
+      "match": "java .*shelter\\.jar",
+      "logFile": "/opt/shelter/logs/app.log",
+      "startScript": "/opt/shelter/start.sh"
     }
   ]
 }
@@ -38,73 +52,82 @@ GET 엔드포인트 목록(`endpoints.json`)을 등록하면, 화면이 주기�
 
 | 필드 | 필수 | 설명 |
 |---|---|---|
-| `pollIntervalMs` (최상위) | | 엔드포인트별로 지정하지 않았을 때의 기본 폴링 주기. 생략 시 3000 |
-| `endpoints[].id` | ✓ | 고유 id. 카드의 내부 key 로 쓰입니다 |
-| `endpoints[].url` | ✓ | `http://` 또는 `https://` 주소. 항상 GET 으로 호출됩니다 |
-| `endpoints[].group` | | 묶어서 보여줄 그룹(컨테이너/프로젝트) 이름. 생략 시 "미분류" (모두 생략하면 그룹 없이 표시) |
-| `endpoints[].label` | | 화면에 표시할 이름. 생략 시 id |
-| `endpoints[].pollIntervalMs` | | 이 엔드포인트만의 폴링 주기 |
+| `pollIntervalMs` | | 상태 확인 주기(ms). 1000 이상, 생략 시 5000 |
+| `groups[].slug` | ✓ | 주소 경로(`/uw`). 영문 소문자 · 숫자 · `-`. `all` `api` `config` `static` `log-config` 제외 |
+| `groups[].name` | ✓ | 탭 · 제목에 보일 이름 |
+| `servers[].id` / `group` | ✓ | 고유 id / 그룹 slug |
+| `servers[].host` / `port` / `user` / `password` | ✓ (port 제외) | SSH 접속 정보. port 생략 시 22 |
+| `servers[].label` | | 표시 이름 (생략 시 id) |
+| `processes[].id` / `server` | ✓ | 고유 id / 서버 id |
+| `processes[].match` | ✓ | `ps` 명령줄에 대한 정규식(Go RE2). 다른 프로세스와 겹치지 않게 구체적으로 (`worker\.sh` 는 `com.apple.mdworker.shared` 에도 맞습니다) |
+| `processes[].logFile` | | 로그 보기에서 `tail` 할 파일의 절대 경로 |
+| `processes[].startScript` | | 시작 · 재시작 때 인자 없이 실행할 스크립트의 절대 경로. 스크립트가 있는 폴더에서 `nohup` 으로 실행하고 출력은 버리므로, 로그는 스크립트가 직접 남겨야 합니다 |
+| `processes[].label` | | 표시 이름 (생략 시 id) |
 
-- 배열 순서가 화면 표시 순서이고, 그룹 순서는 처음 등장한 순서를 따릅니다.
-- 규칙은 프론트(`src/config/schema.ts`)와 Go 서버(`go-server/internal/endpoints/store.go`)가
-  같은 내용으로 검사합니다.
+- 배열 순서가 화면 표시 순서입니다.
+- 규칙은 프론트(`src/config/schema.ts`)와 Go 서버(`go-server/internal/processes/config.go`)가 같은 내용으로 검사합니다.
+- 중지는 match 로 찾은 PID 에 SIGTERM 을 보내고 10초 기다립니다. 그 안에 종료되지 않으면 실패로 알려주며 SIGKILL 은 보내지 않습니다.
 
 ### 사이트 안내문 (config/README.md, config/API.md)
 
-`public/config/README.md` 는 사이트에 들어왔을 때 대시보드 위에 보이는 소개 · 사용 방법이고(처음엔 펼침),
-`public/config/API.md` 는 그 아래의 프론트 · 백엔드 API 명세입니다(처음엔 접힘).
-파일을 고치고 새로고침하면 바로 반영되고(빌드한 경우 `build/config/README.md`), 파일을 지우면 패널도
-사라집니다. 제목, 목록, 코드, 표, 인용, `**굵게**`, `[링크](https://...)` 정도의 마크다운만 지원하며,
-HTML 태그는 글자로 그대로 보입니다.
-
-### 설정이 저장되는 곳
-
-| 실행 방식 | 읽는 곳 | 저장 |
-|---|---|---|
-| Go 서버 | `GET /api/config`: `env.ini` 의 `[ENDPOINTS] FILE` (기본 `./data/endpoints.json`). 아직 저장한 적이 없으면 `build/config/endpoints.json` | `PUT /api/config` 로 `[ENDPOINTS] FILE` 에 저장 |
-| `npm start` | `public/config/endpoints.json` | `src/setupProxy.js` 가 같은 파일에 저장 |
-| 정적 호스팅 (API 없음) | `config/endpoints.json` | 불가 (내보내기 후 파일 교체) |
-
-저장 파일은 `build/` 밖에 두므로, 재배포로 `build/` 를 교체해도 화면에서 수정한 설정은 유지됩니다.
-`npm start` 에서 저장한 `public/config/endpoints.json` 은 다음 `npm run build` 때 빌드에 포함되어
-Go 서버의 기본 설정이 됩니다. `src/setupProxy.js` 를 수정하면 `npm start` 를 다시 시작해야 합니다.
+`public/config/README.md` 는 화면 위에 보이는 소개 · 사용 방법이고(처음엔 펼침), `public/config/API.md` 는
+그 아래의 API 명세입니다(처음엔 접힘). 파일을 고치고 새로고침하면 바로 반영되고(빌드한 경우
+`build/config/README.md`), 파일을 지우면 패널도 사라집니다. 제목, 목록, 코드, 표, 인용, `**굵게**`,
+`[링크](https://...)` 정도의 마크다운만 지원하며, HTML 태그는 글자로 그대로 보입니다.
+**API 를 바꾸면 `API.md` 도 같이 고쳐야 합니다.**
 
 ## 실행
 
+SSH 접속은 Go 서버만 할 수 있으므로 개발 중에도 Go 서버를 같이 띄웁니다.
+
 ```bash
+# 1) Go 서버 (:8088)
+cd go-server/cmd/server
+go run .
+
+# 2) 화면 (:3000, /api 는 :8088 로 전달)
 npm install
 npm start
 ```
 
-`http://localhost:3000` 에서 확인할 수 있습니다.
+Go 서버 주소가 다르면 `API_PROXY_TARGET=http://localhost:9000 npm start` 처럼 지정합니다.
+`src/setupProxy.js` 를 수정하면 `npm start` 를 다시 시작해야 합니다.
 
-## CORS 주의사항
+### 배포
 
-이 GUI는 자체 백엔드 없이 브라우저에서 각 모니터링 백엔드에 **직접** GET 요청을 보냅니다.
-따라서 각 대상 백엔드가 이 GUI를 서빙하는 origin에 대해 CORS를 허용해야 합니다
-(디버그 전용 엔드포인트이므로 보통 `Access-Control-Allow-Origin: *` 정도로 단순하게 열어두는
-경우가 많습니다). 허용되지 않으면 해당 카드는 네트워크 에러로 표시됩니다.
+```bash
+npm run build
+rsync -a --delete build/ go-server/cmd/server/build/
+cd go-server/cmd/server && go build -o main . && ./main
+```
+
+`data/`(설정 · known_hosts)는 `build/` 밖에 있으므로 재배포해도 유지됩니다. git 에는 올리지 않습니다.
 
 ## 폴더 구조
 
 ```
 src/
-  api/client.ts              GET 전용 fetch 클라이언트 (지연시간 측정 포함)
   config/
-    types.ts                 설정 파일(endpoints.json) 타입
+    types.ts                 설정(processes.json) · 상태 응답 타입
     schema.ts                설정 검사 (화면 · 가져오기 · 불러오기 공통)
-    groups.ts                그룹별 묶기
   hooks/
-    useEndpointsConfig.ts    설정 조회/저장(/api/config) + 기본값 채우기
-    useEndpointPoller.ts     엔드포인트 1개에 대한 폴링 상태 관리 (일시정지/새로고침 포함)
-    useNowTick.ts            "n초 전" 표시 갱신용
+    useProcessConfig.ts      설정 조회/저장(/api/config) + API 호출 공통 함수
+    useGroupStatus.ts        그룹 상태 폴링(/api/status)
   components/
-    JsonViewer/              접기/펼치기 + 검색 하이라이트가 되는 JSON 트리 뷰
-    EndpointCard/             카드 1개 (상태 뱃지, 지연시간, JsonViewer)
-    StatusSidebar/           그룹별 상태 사이드바 (클릭 시 카드로 이동)
-    ConfigEditor/            설정 편집 / 가져오기 / 내보내기
-    MarkdownPanel/           config/README.md · API.md 를 대시보드 위 접이식 패널로 표시
-    Header/
-  pages/Dashboard.tsx        사이드바 + 그룹별 카드 + 검색 + 설정
-  setupProxy.js              npm start 용 설정 API (GET/PUT /api/config)
+    Header/                  그룹 탭 (/all, /uw ...)
+    StatusSidebar/           그룹 · 서버 상태 사이드바 (클릭 시 카드로 이동)
+    ServerCard/              서버 1대: 접속 상태 + 프로세스 표 + 로그 · 시작 · 중지 버튼
+    LogViewer/               로그 보기 (줄 수, 필터, 자동 새로고침)
+    ConfigEditor/            그룹 · 서버 · 프로세스 편집 / 가져오기 / 내보내기
+    MarkdownPanel/           config/README.md · API.md 를 접이식 패널로 표시
+  pages/Dashboard.tsx        그룹 → 서버 → 프로세스 화면 구성, 검색, 사이드바 이동
+  App.tsx                    경로 라우팅 (/ → /all)
+  setupProxy.js              npm start 에서 /api 를 Go 서버로 전달
+
+go-server/internal/
+  processes/
+    config.go                설정 타입 · 검사 · 저장 (비밀번호 유지 규칙)
+    remote.go                SSH 연결 재사용 · 명령 실행 · known_hosts 확인
+    monitor.go               ps 로 상태 확인, tail 로그, kill · 시작 스크립트로 제어
+  transport/rest.go          /api 핸들러
 ```

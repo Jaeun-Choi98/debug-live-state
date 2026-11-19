@@ -83,7 +83,7 @@ function renderMarkdown(markdown: string): string {
 /** config 폴더의 md 파일(소개, API 명세 등)을 대시보드 위에 접고 펼 수 있는 패널로 보여준다. */
 const MarkdownPanel: React.FC<MarkdownPanelProps> = ({ file, title, defaultOpen }) => {
   const url = `${process.env.PUBLIC_URL}/config/${file}`;
-  const openStorageKey = `debug-live-state.panel-open.${file}`;
+  const openStorageKey = `process-management.panel-open.${file}`;
   const [html, setHtml] = useState<string | null>(null);
   const [open, setOpen] = useState(() => {
     try {

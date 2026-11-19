@@ -1,5 +1,5 @@
 {
-  "name": "debug-live-state",
+  "name": "process-management",
   "version": "0.1.0",
   "private": true,
   "dependencies": {

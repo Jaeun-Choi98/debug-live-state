@@ -71,6 +71,10 @@
   color: var(--error);
 }
 
+.status-sidebar-item-warn .status-sidebar-label {
+  color: var(--warning);
+}
+
 .status-sidebar-label {
   overflow: hidden;
   text-overflow: ellipsis;

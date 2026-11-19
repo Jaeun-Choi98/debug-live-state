@@ -25,3 +25,50 @@
   font-size: 1rem;
   color: var(--accent);
 }
+
+.navbar {
+  gap: 24px;
+}
+
+.navbar-brand {
+  flex-shrink: 0;
+  text-decoration: none;
+}
+
+/* ── 그룹 탭 (/all, /uw ...) ───────────────────────── */
+.navbar-tabs {
+  display: flex;
+  flex: 1;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.navbar-tab {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-decoration: none;
+  border-radius: 6px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.navbar-tab:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.navbar-tab-active {
+  color: var(--text);
+  background: var(--surface-2);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+@media (max-width: 600px) {
+  .navbar {
+    gap: 12px;
+    padding: 0 16px;
+  }
+}

@@ -46,16 +46,6 @@
   gap: 8px;
 }
 
-.config-editor-notice {
-  margin: 12px 18px 0;
-  padding: 8px 12px;
-  font-size: 0.78rem;
-  color: var(--warning);
-  background: rgba(210, 153, 34, 0.1);
-  border-left: 3px solid var(--warning);
-  border-radius: 4px;
-}
-
 .config-editor-body {
   flex: 1;
   min-height: 0;
@@ -73,6 +63,26 @@
 }
 
 .config-editor-default .config-editor-input { width: 110px; }
+
+/* ── 그룹 · 서버 · 프로세스 표 ───────────────────────── */
+.config-editor-section + .config-editor-section {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.config-editor-section-title {
+  margin: 0 0 4px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.config-editor-section-description {
+  margin: 0 0 10px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
 
 .config-editor-table {
   width: 100%;
@@ -95,22 +105,21 @@
 
 .config-editor-col-order { width: 64px; white-space: nowrap; }
 .config-editor-col-order .btn-icon { display: inline-flex; width: 24px; height: 24px; margin-right: 2px; }
-.config-editor-col-url { width: 34%; }
-.config-editor-col-interval { width: 100px; }
+.config-editor-col-wide { width: 22%; }
+.config-editor-col-narrow { width: 80px; }
 
 .config-editor-input {
   width: 100%;
+}
+
+select.config-editor-input {
+  min-width: 96px;
 }
 
 .config-editor-input-invalid,
 .config-editor-input-invalid:focus {
   border-color: var(--error);
   box-shadow: 0 0 0 3px rgba(248, 81, 73, 0.15);
-}
-
-.config-editor .btn-icon:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
 }
 
 .config-editor-remove:hover:not(:disabled) {

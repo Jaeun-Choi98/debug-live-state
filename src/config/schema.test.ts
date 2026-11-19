@@ -1,43 +1,45 @@
-import { validateEndpointsFile } from './schema';
+import { validateProcessConfig } from './schema';
 
 const valid = {
-  pollIntervalMs: 2000,
-  endpoints: [
-    { id: 'a', group: 'G', label: 'A', url: 'http://localhost:8081/state', pollIntervalMs: 500 },
-    { id: 'b', url: 'https://example.com/state' },
+  pollIntervalMs: 5000,
+  groups: [{ slug: 'uw', name: '의왕' }],
+  servers: [{ id: 'uw-app1', group: 'uw', host: '10.0.0.11', port: 22, user: 'ops', hasPassword: true }],
+  processes: [
+    { id: 'shelter', server: 'uw-app1', match: 'java .*shelter\\.jar', logFile: '/opt/shelter/logs/app.log', startScript: '/opt/shelter/start.sh' },
   ],
 };
 
-describe('validateEndpointsFile', () => {
-  it('accepts a valid file', () => {
-    expect(validateEndpointsFile(valid)).toEqual({ ok: true, file: valid });
-  });
+test('accepts a valid config (saved password counts as password)', () => {
+  expect(validateProcessConfig(valid)).toEqual({ ok: true, config: valid });
+});
 
-  it('collects every problem instead of stopping at the first', () => {
-    const result = validateEndpointsFile({
-      pollIntervalMs: 0,
-      endpoints: [
-        { id: 'a', url: 'ftp://x' },
-        { id: 'a', url: 'http://x', pollIntervalMs: 1.5 },
-        { id: ' ', url: 'not a url', group: 3 },
-      ],
-    });
-    expect(result).toEqual({
-      ok: false,
-      errors: [
-        'pollIntervalMs: 1 이상의 정수여야 합니다',
-        'endpoints[0].url: http:// 또는 https:// 로 시작하는 주소가 필요합니다',
-        "endpoints[1].id: 'a' 가 중복됩니다",
-        'endpoints[1].pollIntervalMs: 1 이상의 정수여야 합니다',
-        'endpoints[2].id: 비어 있습니다',
-        'endpoints[2].url: http:// 또는 https:// 로 시작하는 주소가 필요합니다',
-        'endpoints[2].group: 문자열이어야 합니다',
-      ],
-    });
+test('collects every error with its location', () => {
+  const result = validateProcessConfig({
+    pollIntervalMs: 10,
+    groups: [{ slug: 'uw', name: '의왕' }, { slug: 'all', name: 'x' }, { slug: 'uw', name: '' }],
+    servers: [{ id: 'a', group: 'nope', host: 'bad host', port: 0, user: '' }],
+    processes: [{ id: 'p', server: 'zzz', match: '(', logFile: '/var/log/../shadow', startScript: 'start.sh; rm -rf /' }],
   });
+  expect(result.ok).toBe(false);
+  const fields = result.ok ? [] : result.errors.map(error => error.split(':')[0]);
+  expect(fields).toEqual([
+    'pollIntervalMs',
+    'groups[1].slug',
+    'groups[2].slug',
+    'groups[2].name',
+    'servers[0].group',
+    'servers[0].host',
+    'servers[0].port',
+    'servers[0].user',
+    'servers[0].password',
+    'processes[0].server',
+    'processes[0].match',
+    'processes[0].logFile',
+    'processes[0].startScript',
+  ]);
+});
 
-  it('rejects non-object roots and missing endpoints', () => {
-    expect(validateEndpointsFile([]).ok).toBe(false);
-    expect(validateEndpointsFile({})).toEqual({ ok: false, errors: ['endpoints: 배열이 필요합니다'] });
-  });
+test('rejects a non-object root and missing arrays', () => {
+  expect(validateProcessConfig([])).toEqual({ ok: false, errors: [expect.stringContaining('최상위')] });
+  expect(validateProcessConfig({ groups: [] })).toEqual({ ok: false, errors: ['groups, servers, processes: 배열이 필요합니다'] });
 });
