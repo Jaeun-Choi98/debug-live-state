@@ -15,7 +15,8 @@ import (
 const (
 	// 여러 사람이 같은 화면을 보고 있어도 서버마다 ps 는 이 간격에 한 번만 실행한다.
 	psCacheTTL     = 2 * time.Second
-	commandTimeout = 10 * time.Second
+	// 느린 서버(부하가 큰 서버 · 먼 네트워크)도 기다린다.
+	commandTimeout = 30 * time.Second
 	// 중지(kill) 후 프로세스가 사라지기를 기다리는 최대 시간
 	stopWaitTimeout = 10 * time.Second
 	maxLogLines     = 2000
@@ -295,7 +296,9 @@ func (m *Monitor) ps(ctx context.Context, server Server, fresh bool) psSnapshot 
 		return cached
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
+	// 결과는 같은 서버를 기다리는 다른 요청과 캐시가 함께 쓰므로, 요청한 화면이 취소(새로고침 · 페이지 이동)해도
+	// ps 는 끝까지 실행한다. 그러지 않으면 "context canceled" 가 캐시에 남아 다음 조회에 오류로 보인다.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), commandTimeout)
 	defer cancel()
 	output, err := m.remote.run(ctx, server, psCommand)
 	snapshot := psSnapshot{at: time.Now(), rows: parsePS(output), err: err}

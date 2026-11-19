@@ -18,7 +18,7 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
-const dialTimeout = 5 * time.Second
+const dialTimeout = 15 * time.Second
 
 // remote 는 서버별 SSH 연결을 열어 두고 재사용하면서 명령을 실행한다.
 // 연결은 접속 정보(user@host:port + 비밀번호)마다 하나이며, 끊겼으면 한 번 다시 연결한다.
@@ -94,7 +94,10 @@ func (r *remote) exec(ctx context.Context, server Server, command string, input 
 		// 세션을 닫아 Run 을 끝내고 기다린다. (돌아간 뒤에도 stdout 에 쓰는 일이 없도록)
 		session.Close()
 		<-done
-		return fmt.Errorf("명령이 시간 안에 끝나지 않았습니다: %w", ctx.Err())
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("명령이 시간 안에 끝나지 않았습니다: %w", ctx.Err())
+		}
+		return fmt.Errorf("명령이 취소되었습니다: %w", ctx.Err())
 	case err := <-done:
 		var exitErr *ssh.ExitError
 		if errors.As(err, &exitErr) {

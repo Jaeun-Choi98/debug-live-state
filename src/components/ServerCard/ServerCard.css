@@ -93,7 +93,7 @@
 .server-card-table td {
   padding: 6px;
   vertical-align: middle;
-  border-bottom: 1px solid var(--surface-2);
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .server-card-table tr:last-child td {
