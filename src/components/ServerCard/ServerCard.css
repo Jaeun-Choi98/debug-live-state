@@ -92,8 +92,23 @@
 
 .server-card-table td {
   padding: 6px;
+  white-space: nowrap;
   vertical-align: middle;
   border-bottom: 1px solid var(--border-soft);
+}
+
+/* 프로세스 이름 칸은 남는 폭만 쓰고, 넘치면 말줄임(…)으로 자른다. (max-width: 0 이 없으면 표가 이름 길이만큼 늘어난다)
+   이름 아래 자동 재시작 표시도 같이 자른다. */
+.server-card-table td:first-child {
+  width: 100%;
+  min-width: 8em;
+  max-width: 0;
+}
+
+.server-card-table td:first-child .server-card-watch {
+  max-width: calc(100% - 14px);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .server-card-table tr:last-child td {
@@ -112,6 +127,7 @@
 }
 
 .server-card-process-name {
+  min-width: 0;
   overflow: hidden;
   font-weight: 500;
   text-overflow: ellipsis;
@@ -147,7 +163,7 @@
 
 .server-card-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
   gap: 4px;
 }

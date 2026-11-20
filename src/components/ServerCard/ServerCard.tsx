@@ -123,7 +123,7 @@ const ServerCard: React.FC<ServerCardProps> = ({ server, processes, status, stat
                 return (
                   <tr key={process.id} className={`server-card-row-${state}`}>
                     <td>
-                      <div className="server-card-process" title={`match: ${process.match}`}>
+                      <div className="server-card-process" title={`${process.label || process.id}\nmatch: ${process.match}`}>
                         <span className={`status-dot status-${action ? 'loading' : state}`} />
                         <span className="server-card-process-name">{process.label || process.id}</span>
                         {known && !running && <span className="server-card-badge">STOPPED</span>}
