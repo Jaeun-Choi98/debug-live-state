@@ -173,7 +173,7 @@ const Dashboard: React.FC<DashboardProps> = ({ slug, navigate }) => {
                     <span className="server-group-count">{servers.length}</span>
                   </h2>
                 )}
-                <div className="server-grid">
+                <div className={`server-grid${slug === 'all' ? '' : ' server-grid-wide'}`}>
                   {servers.map(({ server, processes, status: serverStatus, state }) => {
                     // 검색: 그룹 · 서버로 걸리면 프로세스를 모두, 프로세스로 걸리면 일치하는 프로세스만 보여준다.
                     const serverMatches = matches(group.name, server.id, server.label, server.host);

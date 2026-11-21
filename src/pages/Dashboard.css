@@ -40,6 +40,11 @@
   gap: 14px;
 }
 
+/* 그룹 화면(/uw)은 한 그룹만 보므로 카드를 한 줄에 하나씩 넓게 보여준다. (긴 프로세스 이름 · 명령줄이 덜 잘린다) */
+.server-grid-wide {
+  grid-template-columns: 1fr;
+}
+
 /* 왼쪽: 상태 사이드바, 오른쪽: 툴바 + 서버 카드 그리드 */
 .dashboard-layout {
   display: flex;
